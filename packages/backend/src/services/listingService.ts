@@ -41,6 +41,8 @@ export interface ListingService {
   clientDetail(clientId: string, requestId: string): ChangeRequestDetail;
   listForDeveloper(developerId: string): ChangeRequest[];
   developerDetail(developerId: string, requestId: string): ChangeRequestDetail;
+  /** Admin can view the full payload of any change request. */
+  adminDetail(requestId: string): ChangeRequestDetail;
   listAllForAdmin(): ChangeRequest[];
 }
 
@@ -99,6 +101,14 @@ export function makeListingService(
 
     listAllForAdmin() {
       return repos.changeRequests.listAllSubmitted();
+    },
+
+    adminDetail(requestId) {
+      const request = repos.changeRequests.getById(requestId);
+      if (!request) {
+        throw new ServiceError("AUTHZ_FORBIDDEN", 404, "Change request not found.");
+      }
+      return assembleDetail(request);
     },
   };
 }
