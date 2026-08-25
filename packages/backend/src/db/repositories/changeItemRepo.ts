@@ -64,12 +64,12 @@ export function makeChangeItemRepo(db: AppDatabase) {
       return r ? mapChangeItem(r) : null;
     },
 
-    /** Items of a request, in insertion order (created_at, then id tiebreak). */
+    /** Items of a request, in insertion order (SQLite rowid is monotonic). */
     listByRequest(changeRequestId: string): ChangeItem[] {
       const rows = db
         .prepare(
           `SELECT * FROM change_item WHERE change_request_id = ?
-           ORDER BY created_at ASC, id ASC`
+           ORDER BY rowid ASC`
         )
         .all(changeRequestId) as Row[];
       return rows.map(mapChangeItem);
