@@ -11,3 +11,5 @@ export * from "./inspectorTokenService.js";
 export * from "./changeItemValidator.js";
 export * from "./changeRequestService.js";
 export * from "./fileStore.js";
+export * from "./rosterService.js";
+export * from "./assignmentService.js";
