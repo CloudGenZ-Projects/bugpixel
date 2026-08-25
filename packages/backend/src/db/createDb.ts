@@ -23,15 +23,23 @@
  *
  * Requirements: 2.1, 14.3, 13.2
  */
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
 
 import { SCHEMA_SQL } from "./schema.js";
+
+// `node:sqlite` is loaded via a runtime require rather than a static ESM import.
+// Vitest (see vitest-dev/vitest#10630) mishandles `node:`-only builtins in its
+// externalization list and tries to transform `node:sqlite`, which fails. A
+// runtime require bypasses Vite's static resolver while behaving identically at
+// runtime under Node's native loader.
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync } = nodeRequire("node:sqlite") as typeof import("node:sqlite");
 
 /**
  * The application database handle. Aliased so the concrete driver stays an
  * implementation detail of this module.
  */
-export type AppDatabase = DatabaseSync;
+export type AppDatabase = import("node:sqlite").DatabaseSync;
 
 /**
  * Open a SQLite database, enable foreign keys, and apply the portal schema.
