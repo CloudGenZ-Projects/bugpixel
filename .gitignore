@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# SQLite runtime data + blobs
+data/
+*.db
+*.db-wal
+*.db-shm
+storage/
+
+# Logs / env / editor
+*.log
+.env
+.env.*
+.DS_Store
+build.log

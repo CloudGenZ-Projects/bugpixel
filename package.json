@@ -1,0 +1,20 @@
+{
+  "name": "change-request-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Change Request Portal - clients submit visual change requests against websites they own.",
+  "workspaces": [
+    "packages/shared",
+    "packages/backend",
+    "packages/frontend"
+  ],
+  "scripts": {
+    "build:shared": "npm run build --workspace packages/shared",
+    "build:backend": "npm run build --workspace packages/backend",
+    "build:frontend": "npm run build --workspace packages/frontend",
+    "build": "npm run build:shared && npm run build:backend && npm run build:frontend",
+    "test:backend": "npm run test --workspace packages/backend",
+    "test:frontend": "npm run test --workspace packages/frontend",
+    "test": "npm run test:backend && npm run test:frontend"
+  }
+}
