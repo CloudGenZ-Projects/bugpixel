@@ -7,3 +7,4 @@ export * from "./sessionService.js";
 export * from "./authService.js";
 export * from "./authzService.js";
 export * from "./ownershipService.js";
+export * from "./inspectorTokenService.js";
