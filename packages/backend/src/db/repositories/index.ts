@@ -17,6 +17,26 @@ import {
 
 export function makeRepositories(db: AppDatabase) {
   return {
+    /**
+     * Run `fn` inside a single SQLite transaction. Commits on success; rolls
+     * back and rethrows on any error so partial writes never survive
+     * (Req 11.7 atomic submit).
+     */
+    transaction<T>(fn: () => T): T {
+      db.exec("BEGIN");
+      try {
+        const result = fn();
+        db.exec("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // ignore rollback errors; surface the original error
+        }
+        throw err;
+      }
+    },
     users: makeUserRepo(db),
     projects: makeProjectRepo(db),
     websites: makeWebsiteRepo(db),

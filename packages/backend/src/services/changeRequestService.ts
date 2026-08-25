@@ -13,6 +13,7 @@ import { v4 as uuid } from "uuid";
 
 import {
   ChangeRequestStatus,
+  MAX_ITEMS_PER_REQUEST,
   type ChangeItem,
   type ChangeRequest,
   type ChangeType,
@@ -52,6 +53,7 @@ export interface AddItemInput {
 export interface ChangeRequestService {
   createDraft(clientId: string, websiteId: string): ChangeRequest;
   addItem(clientId: string, requestId: string, input: AddItemInput): ChangeItem;
+  submit(clientId: string, requestId: string): ChangeRequest;
 }
 
 export function makeChangeRequestService(
@@ -130,6 +132,61 @@ export function makeChangeRequestService(
       });
 
       return item;
+    },
+
+    submit(clientId, requestId) {
+      const cr = loadOwnedDraft(clientId, requestId);
+
+      // Item-count guard (Req 10.4, 11.1, 11.5). Checked before the transaction
+      // so the stored state is trivially unchanged on rejection.
+      const itemCount = repos.changeItems.countByRequest(cr.id);
+      if (itemCount === 0) {
+        throw new ServiceError(
+          "VALIDATION_NO_ITEMS",
+          400,
+          "A change request must contain at least one change item."
+        );
+      }
+      if (itemCount > MAX_ITEMS_PER_REQUEST) {
+        throw new ServiceError(
+          "VALIDATION_TOO_MANY_ITEMS",
+          400,
+          `A change request may contain at most ${MAX_ITEMS_PER_REQUEST} change items.`
+        );
+      }
+
+      // Determine routing: an active assignment on the website's project routes
+      // the request to Submitted; otherwise AwaitingDeveloperAssignment
+      // (Req 11.2-11.4, 11.6, 14.4).
+      const website = repos.websites.getById(cr.websiteId);
+      if (!website) {
+        throw new ServiceError(
+          "SUBMISSION_FAILED",
+          500,
+          "The change request could not be submitted."
+        );
+      }
+      const assignment = repos.assignments.getByProject(website.projectId);
+      const status = assignment
+        ? ChangeRequestStatus.Submitted
+        : ChangeRequestStatus.AwaitingDeveloperAssignment;
+      const submittedAt = nowIso();
+
+      // Persist status + timestamp atomically. Any failure rolls back leaving
+      // the stored state exactly as before (Req 11.7, Property 20).
+      try {
+        repos.transaction(() => {
+          repos.changeRequests.updateStatusAndSubmittedAt(cr.id, status, submittedAt);
+        });
+      } catch {
+        throw new ServiceError(
+          "SUBMISSION_FAILED",
+          500,
+          "The change request could not be submitted."
+        );
+      }
+
+      return repos.changeRequests.getById(cr.id)!;
     },
   };
 }
