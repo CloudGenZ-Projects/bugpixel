@@ -10,3 +10,4 @@ export * from "./ownershipService.js";
 export * from "./inspectorTokenService.js";
 export * from "./changeItemValidator.js";
 export * from "./changeRequestService.js";
+export * from "./fileStore.js";
