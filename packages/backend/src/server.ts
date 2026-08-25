@@ -36,7 +36,12 @@ function main() {
     inspectorTokenSecret: secret,
     storageRoot,
   });
-  const app = makeApp(container, { secureCookies: isProd });
+  const app = makeApp(container, {
+    secureCookies: isProd,
+    enforceHttps: isProd,
+    spaDir: process.env.CRP_SPA_DIR,
+    inspectorDir: process.env.CRP_INSPECTOR_DIR,
+  });
 
   app.listen(port, () => {
     // eslint-disable-next-line no-console

@@ -24,10 +24,44 @@ import {
 export interface AppOptions {
   /** When true, the session cookie is marked Secure (production/HTTPS). */
   secureCookies?: boolean;
+  /**
+   * When true, enforce HTTPS: send HSTS on every response and redirect plain
+   * HTTP requests to https (Req 15.5). Enable in production behind a
+   * TLS-terminating proxy that sets X-Forwarded-Proto.
+   */
+  enforceHttps?: boolean;
+  /** Absolute path to the built SPA to serve (optional). */
+  spaDir?: string;
+  /** Absolute path to the built inspector script directory (optional). */
+  inspectorDir?: string;
 }
 
 export function makeApp(container: Container, options: AppOptions = {}) {
   const app = express();
+  app.set("trust proxy", true);
+
+  // --- Security headers + HTTPS enforcement (Req 15.5) ---------------------
+  app.use((req, res, next) => {
+    // Baseline security headers (align with Golden Path HTTP security headers
+    // guidance: HSTS, X-Content-Type-Options, X-Frame-Options).
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    if (options.enforceHttps) {
+      res.setHeader(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains"
+      );
+      const proto = req.headers["x-forwarded-proto"];
+      const isHttps = req.secure || proto === "https";
+      if (!isHttps) {
+        // Redirect plain HTTP to HTTPS.
+        return res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+      }
+    }
+    next();
+  });
+
   app.use(express.json({ limit: "15mb" }));
   app.use(cookieParser());
 
@@ -240,6 +274,21 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   app.use("/api", (_req: Request, res: Response) => {
     res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
   });
+
+  // Serve the injected inspector script from the portal origin (Req 17.1) so
+  // client websites can include <script src="https://portal/inspector/...">.
+  if (options.inspectorDir) {
+    app.use("/inspector", express.static(options.inspectorDir));
+  }
+
+  // Serve the built SPA and support client-side routing (deep links).
+  if (options.spaDir) {
+    const spaDir = options.spaDir;
+    app.use(express.static(spaDir));
+    app.get("*", (_req: Request, res: Response) => {
+      res.sendFile("index.html", { root: spaDir });
+    });
+  }
 
   app.use(errorHandler);
   return app;
