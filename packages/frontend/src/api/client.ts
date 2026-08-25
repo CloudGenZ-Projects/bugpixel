@@ -1,0 +1,57 @@
+/**
+ * Thin API client for the portal backend. All requests include credentials so
+ * the HTTP-only session cookie is sent. Non-2xx responses throw an ApiClientError
+ * carrying the backend's `{ error: { code, message, field? } }` body.
+ */
+import type { ApiError, ErrorCode } from "@crp/shared";
+
+export class ApiClientError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: ErrorCode | string,
+    message: string,
+    public readonly field?: string
+  ) {
+    super(message);
+    this.name = "ApiClientError";
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: "include",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 204) return undefined as T;
+
+  let json: unknown = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+  }
+
+  if (!res.ok) {
+    const err = (json as ApiError | null)?.error;
+    throw new ApiClientError(
+      res.status,
+      err?.code ?? "UNKNOWN",
+      err?.message ?? res.statusText,
+      err?.field
+    );
+  }
+  return json as T;
+}
+
+export const api = {
+  get: <T>(path: string) => request<T>("GET", path),
+  post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
+  put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body),
+  del: <T>(path: string) => request<T>("DELETE", path),
+};
