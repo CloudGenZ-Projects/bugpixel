@@ -172,17 +172,30 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   app.get(
     "/api/files/:key",
     requireSession,
-    asyncHandler((req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const key = req.params.key;
       // Validate key is hex only to prevent path traversal
       if (!/^[0-9a-f]{64}$/.test(key)) {
         return res.status(400).json(makeApiError("AUTH_REQUIRED", "Invalid file key."));
       }
+
+      // R2 async path
+      if (container.r2Ops) {
+        try {
+          const { bytes, contentType } = await container.r2Ops.read(key);
+          res.setHeader("Content-Type", contentType);
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          return res.send(Buffer.from(bytes));
+        } catch {
+          return res.status(404).json(makeApiError("AUTH_REQUIRED", "File not found."));
+        }
+      }
+
+      // Local filesystem path
       if (!container.fileStore.exists(key)) {
         return res.status(404).json(makeApiError("AUTH_REQUIRED", "File not found."));
       }
       const bytes = container.fileStore.read(key);
-      // Infer content type from magic bytes or default to octet-stream
       let contentType = "application/octet-stream";
       if (bytes[0] === 0x89 && bytes[1] === 0x50) contentType = "image/png";
       else if (bytes[0] === 0xFF && bytes[1] === 0xD8) contentType = "image/jpeg";

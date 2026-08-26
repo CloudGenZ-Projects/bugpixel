@@ -1,7 +1,5 @@
 /**
- * Dependency container: wires the repositories and every service from a small
- * set of inputs (an open database, the inspector-token secret, the blob storage
- * root, and a clock). Route handlers and middleware receive this container.
+ * Dependency container: wires repositories and services.
  */
 import type { AppDatabase } from "./db/createDb.js";
 import { makeRepositories, type Repositories } from "./db/repositories/index.js";
@@ -33,14 +31,16 @@ import {
   type ListingService,
   type WebsiteService,
 } from "./services/index.js";
+import { makeR2FileStore, makeR2AsyncOps, type R2Config } from "./services/r2Store.js";
 
 export interface ContainerConfig {
   db: AppDatabase;
   inspectorTokenSecret: string;
   storageRoot: string;
   clock?: Clock;
-  /** bcrypt cost; keep low (e.g. 4) in tests for speed. */
   bcryptRounds?: number;
+  /** When provided, use Cloudflare R2 for blob storage instead of local FS. */
+  r2Config?: R2Config;
 }
 
 export interface Container {
@@ -58,13 +58,21 @@ export interface Container {
   assignments: AssignmentService;
   listing: ListingService;
   websites: WebsiteService;
-  /** Secret used to derive CSRF tokens (server-side only). */
   csrfSecret: string;
+  /** Async R2 operations (null when using local FS). */
+  r2Ops: ReturnType<typeof makeR2AsyncOps> | null;
 }
 
 export function makeContainer(config: ContainerConfig): Container {
   const clock = config.clock ?? systemClock;
   const repos = makeRepositories(config.db);
+
+  // File store: R2 if configured, otherwise local filesystem
+  const fileStore = config.r2Config
+    ? makeR2FileStore(config.r2Config)
+    : makeFileStore(config.storageRoot);
+
+  const r2Ops = config.r2Config ? makeR2AsyncOps(config.r2Config) : null;
 
   const sessions = makeSessionService(clock);
   const auth = makeAuthService(repos.users, sessions, config.bcryptRounds ?? 10);
@@ -81,7 +89,6 @@ export function makeContainer(config: ContainerConfig): Container {
     clock
   );
   const validator = makeChangeItemValidator();
-  const fileStore = makeFileStore(config.storageRoot);
   const changeRequests = makeChangeRequestService(
     repos,
     validator,
@@ -110,5 +117,6 @@ export function makeContainer(config: ContainerConfig): Container {
     listing,
     websites,
     csrfSecret: config.inspectorTokenSecret,
+    r2Ops,
   };
 }
