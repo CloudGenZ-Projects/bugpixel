@@ -755,6 +755,32 @@ ${items.map(({ item, screenshot, componentReference }, i) => `
     })
   );
 
+  app.patch(
+    "/api/admin/websites/:id",
+    requireAdmin,
+    asyncHandler((req: Request, res: Response) => {
+      const { name, url } = req.body ?? {};
+      const existing = container.repos.websites.getById(req.params.id);
+      if (!existing) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Website not found."));
+      container.repos.websites.update(req.params.id, {
+        name: name ? String(name) : undefined,
+        url: url ? String(url) : undefined,
+      });
+      res.json({ website: container.repos.websites.getById(req.params.id) });
+    })
+  );
+
+  app.delete(
+    "/api/admin/websites/:id",
+    requireAdmin,
+    asyncHandler((req: Request, res: Response) => {
+      const existing = container.repos.websites.getById(req.params.id);
+      if (!existing) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Website not found."));
+      container.repos.websites.remove(req.params.id);
+      res.json({ ok: true });
+    })
+  );
+
   // Get all clients (for website owner assignment)
   app.get(
     "/api/admin/clients",

@@ -46,6 +46,15 @@ export function makeWebsiteRepo(db: AppDatabase) {
       const rows = db.prepare(`SELECT * FROM website ORDER BY name ASC`).all() as Row[];
       return rows.map(mapWebsite);
     },
+
+    update(id: string, fields: { name?: string; url?: string }): void {
+      if (fields.name) db.prepare(`UPDATE website SET name = ? WHERE id = ?`).run(fields.name, id);
+      if (fields.url) db.prepare(`UPDATE website SET url = ? WHERE id = ?`).run(fields.url, id);
+    },
+
+    remove(id: string): void {
+      db.prepare(`DELETE FROM website WHERE id = ?`).run(id);
+    },
   };
 }
 

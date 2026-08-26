@@ -21,6 +21,15 @@ export function AdminDashboard() {
   const [newProjectName, setNewProjectName] = useState("");
   const [newDevEmail, setNewDevEmail] = useState("");
   const [newDevPassword, setNewDevPassword] = useState("");
+  // Website form
+  const [newWebName, setNewWebName] = useState("");
+  const [newWebUrl, setNewWebUrl] = useState("");
+  const [newWebProject, setNewWebProject] = useState("");
+  const [newWebOwner, setNewWebOwner] = useState("");
+  const [clients, setClients] = useState<Array<{ id: string; email: string }>>([]);
+  const [editingWebsite, setEditingWebsite] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUrl, setEditUrl] = useState("");
 
   function load() {
     Promise.all([
@@ -29,12 +38,14 @@ export function AdminDashboard() {
       api.get<{ projects: Project[] }>("/api/admin/projects"),
       api.get<{ websites: Array<Website & { ownerEmail: string; projectName: string }> }>("/api/admin/websites"),
       endpoints.listAssignments(),
-    ]).then(([r, d, p, w, a]) => {
+      api.get<{ clients: Array<{ id: string; email: string }> }>("/api/admin/clients"),
+    ]).then(([r, d, p, w, a, c]) => {
       setRequests(r.changeRequests);
       setDevelopers(d.developers);
       setProjects(p.projects);
       setWebsites(w.websites);
       setAssignments(a.assignments);
+      setClients(c.clients);
       setLoading(false);
     });
   }
@@ -177,7 +188,7 @@ export function AdminDashboard() {
           {/* Websites */}
           <div className="bg-white rounded-xl border border-gray-200 p-6 lg:col-span-2">
             <h3 className="font-semibold text-gray-800 mb-4">Websites ({websites.length})</h3>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto mb-4">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100">
@@ -185,19 +196,68 @@ export function AdminDashboard() {
                     <th className="text-left py-2 text-gray-500 font-medium">URL</th>
                     <th className="text-left py-2 text-gray-500 font-medium">Project</th>
                     <th className="text-left py-2 text-gray-500 font-medium">Owner</th>
+                    <th className="text-right py-2 text-gray-500 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {websites.map((w) => (
                     <tr key={w.id}>
-                      <td className="py-2 text-gray-700">{w.name}</td>
-                      <td className="py-2 text-gray-400 truncate max-w-48">{w.url}</td>
-                      <td className="py-2 text-gray-600">{w.projectName}</td>
-                      <td className="py-2 text-gray-600">{w.ownerEmail}</td>
+                      {editingWebsite === w.id ? (
+                        <>
+                          <td className="py-2"><input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-sm" /></td>
+                          <td className="py-2"><input value={editUrl} onChange={(e) => setEditUrl(e.target.value)} className="w-full px-2 py-1 border border-gray-300 rounded text-sm" /></td>
+                          <td className="py-2 text-gray-600">{w.projectName}</td>
+                          <td className="py-2 text-gray-600">{w.ownerEmail}</td>
+                          <td className="py-2 text-right">
+                            <button onClick={async () => { await api.patch(`/api/admin/websites/${w.id}`, { name: editName, url: editUrl }); setEditingWebsite(null); load(); }} className="text-xs px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded mr-1">Save</button>
+                            <button onClick={() => setEditingWebsite(null)} className="text-xs px-2 py-1 text-gray-500">Cancel</button>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="py-2 text-gray-700">{w.name}</td>
+                          <td className="py-2 text-gray-400 truncate max-w-48">{w.url}</td>
+                          <td className="py-2 text-gray-600">{w.projectName}</td>
+                          <td className="py-2 text-gray-600">{w.ownerEmail}</td>
+                          <td className="py-2 text-right">
+                            <button onClick={() => { setEditingWebsite(w.id); setEditName(w.name); setEditUrl(w.url); }} className="text-xs px-2 py-1 text-blue-600 hover:text-blue-800 mr-1">Edit</button>
+                            <button onClick={async () => { if (confirm(`Delete ${w.name}?`)) { await api.del(`/api/admin/websites/${w.id}`); load(); } }} className="text-xs px-2 py-1 text-red-500 hover:text-red-700">Delete</button>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+            {/* Add website form */}
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs text-gray-500 mb-2 font-medium">Add Website</p>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <input value={newWebName} onChange={(e) => setNewWebName(e.target.value)} placeholder="Website name" className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+                <input value={newWebUrl} onChange={(e) => setNewWebUrl(e.target.value)} placeholder="https://client-site.com" className="px-3 py-2 border border-gray-300 rounded-lg text-sm" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <select value={newWebProject} onChange={(e) => setNewWebProject(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">Select project...</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <select value={newWebOwner} onChange={(e) => setNewWebOwner(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                  <option value="">Select client owner...</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.email}</option>)}
+                </select>
+                <button
+                  onClick={async () => {
+                    if (!newWebName || !newWebUrl || !newWebProject || !newWebOwner) return;
+                    await api.post("/api/admin/websites", { name: newWebName, url: newWebUrl, projectId: newWebProject, ownerClientId: newWebOwner });
+                    setNewWebName(""); setNewWebUrl(""); setNewWebProject(""); setNewWebOwner("");
+                    load();
+                  }}
+                  className="px-3 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-hover"
+                >
+                  Add Website
+                </button>
+              </div>
             </div>
           </div>
 

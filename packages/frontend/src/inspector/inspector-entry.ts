@@ -1,16 +1,11 @@
 /**
- * Deployable injected inspector entry point.
+ * Deployable injected inspector entry point with floating toolbar.
  *
- * This is the script the portal owner includes on client websites via
- * `<script src="https://portal/inspector/inspector.js">`. It wires the tested
- * `Inspector` class (bootstrap + token gating + capture handshake) to the real
- * DOM: hover-highlighting, click-to-select, and an html2canvas-based screenshot
- * capturer that draws a highlight overlay before rasterizing.
+ * Modes:
+ *   - Navigate (default): clicks work normally, user browses the site
+ *   - Select: hover highlights elements, click captures + sends to portal
  *
- * It stays inert for anonymous visitors — nothing activates until an
- * origin-verified INSPECTOR_INIT arrives from the opener with a valid token.
- *
- * Requirements: 6.1-6.6, 7.1-7.4, 15.1, 15.2
+ * Stays inert until INSPECTOR_INIT handshake completes with valid token.
  */
 import html2canvas from "html2canvas";
 
@@ -21,30 +16,46 @@ import {
   type ScreenshotResult,
 } from "./inspector.js";
 
-/** The portal origin is injected at include time via a data attribute, else same-origin opener. */
 function resolvePortalOrigin(): string {
   const el = document.currentScript as HTMLScriptElement | null;
   const attr = el?.getAttribute("data-portal-origin");
   if (attr) return attr;
-  // Fall back to the script's own origin (it is served from the portal).
   try {
     if (el?.src) return new URL(el.src).origin;
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
   return window.location.origin;
 }
 
-/** The website id this page corresponds to, injected via data attribute. */
 function resolveWebsiteId(): string {
   const el = document.currentScript as HTMLScriptElement | null;
   return el?.getAttribute("data-website-id") ?? "";
 }
 
-/** Draw a highlight overlay over an element, run html2canvas, then remove it. */
-const captureWithHighlight: CaptureFn = async (
-  el: Element
-): Promise<ScreenshotResult> => {
+/** Parse user agent into readable browser + OS names */
+function parseBrowserInfo() {
+  const ua = navigator.userAgent;
+  let browser = "Unknown";
+  let os = "Unknown";
+
+  // Browser detection
+  if (ua.includes("Firefox/")) browser = "Firefox " + ua.split("Firefox/")[1]?.split(" ")[0];
+  else if (ua.includes("Edg/")) browser = "Edge " + ua.split("Edg/")[1]?.split(" ")[0];
+  else if (ua.includes("Chrome/")) browser = "Chrome " + ua.split("Chrome/")[1]?.split(" ")[0];
+  else if (ua.includes("Safari/") && !ua.includes("Chrome")) browser = "Safari " + (ua.split("Version/")[1]?.split(" ")[0] ?? "");
+
+  // OS detection
+  if (ua.includes("Windows NT 10")) os = "Windows 10/11";
+  else if (ua.includes("Windows")) os = "Windows";
+  else if (ua.includes("Mac OS X")) os = "macOS " + ua.split("Mac OS X ")[1]?.split(")")[0]?.replace(/_/g, ".");
+  else if (ua.includes("Linux")) os = "Linux";
+  else if (ua.includes("Android")) os = "Android";
+  else if (ua.includes("iOS") || ua.includes("iPhone")) os = "iOS";
+
+  return { browser, os };
+}
+
+/** Capture screenshot with highlight overlay */
+const captureWithHighlight: CaptureFn = async (el: Element): Promise<ScreenshotResult> => {
   const rect = el.getBoundingClientRect();
   const overlay = document.createElement("div");
   Object.assign(overlay.style, {
@@ -68,12 +79,8 @@ const captureWithHighlight: CaptureFn = async (
   }
 };
 
-/** Validate a token against the portal API (called by the Inspector). */
-async function validateToken(
-  portalOrigin: string,
-  token: string,
-  websiteId: string
-): Promise<boolean> {
+/** Validate token against portal API */
+async function validateToken(portalOrigin: string, token: string, websiteId: string): Promise<boolean> {
   try {
     const res = await fetch(`${portalOrigin}/api/inspector/validate`, {
       method: "POST",
@@ -91,7 +98,12 @@ function main(): void {
   const portalOrigin = resolvePortalOrigin();
   const websiteId = resolveWebsiteId();
 
-  // Capture recent console errors for debugging context
+  if (!portalOrigin || !websiteId || websiteId === "REPLACE_WITH_WEBSITE_ID") {
+    console.info("[BugPixel] inspector not loaded: set portalOrigin and websiteId in config.js");
+    return;
+  }
+
+  // Capture console errors for debugging context
   const consoleErrors: string[] = [];
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
@@ -99,7 +111,6 @@ function main(): void {
     if (consoleErrors.length > 10) consoleErrors.shift();
     originalError.apply(console, args);
   };
-  // Also capture unhandled errors
   window.addEventListener("error", (e) => {
     consoleErrors.push(`${e.message} at ${e.filename}:${e.lineno}`);
     if (consoleErrors.length > 10) consoleErrors.shift();
@@ -113,43 +124,132 @@ function main(): void {
   });
   inspector.start();
 
-  // Hover highlight (only visible while enabled).
+  // --- Floating toolbar + mode management ---
+  let mode: "navigate" | "select" = "navigate";
   let hovered: HTMLElement | null = null;
   const HL_CLASS = "__crp_inspector_hover__";
+
+  // Inject styles
   const style = document.createElement("style");
-  style.textContent = `.${HL_CLASS}{outline:2px dashed #007aff !important;cursor:crosshair !important;}`;
+  style.textContent = `
+    .${HL_CLASS} { outline: 2px dashed #6366f1 !important; cursor: crosshair !important; }
+    #__bugpixel_toolbar__ {
+      position: fixed; bottom: 20px; right: 20px; z-index: 2147483646;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1e1b4b; color: white; border-radius: 12px;
+      padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3); font-size: 13px;
+      user-select: none; transition: opacity 0.2s;
+    }
+    #__bugpixel_toolbar__ button {
+      border: none; border-radius: 8px; padding: 6px 14px; font-size: 12px;
+      font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    #__bugpixel_toolbar__ .bp-nav {
+      background: ${mode === "navigate" ? "#6366f1" : "#374151"}; color: white;
+    }
+    #__bugpixel_toolbar__ .bp-sel {
+      background: ${mode === "select" ? "#ef4444" : "#374151"}; color: white;
+    }
+    #__bugpixel_toolbar__ .bp-active { transform: scale(1.05); }
+  `;
   document.head.appendChild(style);
 
-  document.addEventListener(
-    "mouseover",
-    (e) => {
-      if (!inspector.isEnabled) return;
-      const t = e.target as HTMLElement;
-      if (hovered) hovered.classList.remove(HL_CLASS);
-      hovered = t;
-      t.classList.add(HL_CLASS);
-    },
-    true
-  );
+  // Create toolbar (hidden until inspector is enabled)
+  const toolbar = document.createElement("div");
+  toolbar.id = "__bugpixel_toolbar__";
+  toolbar.style.display = "none";
+  toolbar.innerHTML = `
+    <span style="font-weight:700;font-size:11px;opacity:0.7;">🐛 BugPixel</span>
+    <button class="bp-nav bp-active" id="__bp_nav_btn__">🔗 Navigate</button>
+    <button class="bp-sel" id="__bp_sel_btn__">🎯 Select</button>
+  `;
+  document.body.appendChild(toolbar);
 
-  document.addEventListener(
-    "click",
-    (e) => {
-      if (!inspector.isEnabled) return;
-      // Intercept the selection click so the site doesn't navigate.
-      e.preventDefault();
-      e.stopPropagation();
-      const el = e.target as Element;
-      if (hovered) hovered.classList.remove(HL_CLASS);
-      void inspector.selectElement(el).catch((err) => {
-        // Retryable capture error: leave selection active, log for the client.
-        console.warn("Inspector capture failed, please retry:", err?.message ?? err);
-      });
-      // computeSelector is exported for parity/testing; selection uses it internally.
-      void computeSelector(el);
-    },
-    true
-  );
+  const navBtn = document.getElementById("__bp_nav_btn__")!;
+  const selBtn = document.getElementById("__bp_sel_btn__")!;
+
+  function setMode(m: "navigate" | "select") {
+    mode = m;
+    navBtn.style.background = m === "navigate" ? "#6366f1" : "#374151";
+    selBtn.style.background = m === "select" ? "#ef4444" : "#374151";
+    if (m === "navigate" && hovered) {
+      hovered.classList.remove(HL_CLASS);
+      hovered = null;
+    }
+  }
+
+  navBtn.addEventListener("click", (e) => { e.stopPropagation(); setMode("navigate"); });
+  selBtn.addEventListener("click", (e) => { e.stopPropagation(); setMode("select"); });
+
+  // Show toolbar when inspector becomes enabled (poll)
+  const showPoll = setInterval(() => {
+    if (inspector.isEnabled) {
+      toolbar.style.display = "flex";
+      clearInterval(showPoll);
+    }
+  }, 200);
+
+  // Hover highlight (only in select mode)
+  document.addEventListener("mouseover", (e) => {
+    if (!inspector.isEnabled || mode !== "select") return;
+    const t = e.target as HTMLElement;
+    if (toolbar.contains(t)) return;
+    if (hovered) hovered.classList.remove(HL_CLASS);
+    hovered = t;
+    t.classList.add(HL_CLASS);
+  }, true);
+
+  // Click handler (only intercepts in select mode)
+  document.addEventListener("click", (e) => {
+    if (!inspector.isEnabled || mode !== "select") return;
+    const t = e.target as HTMLElement;
+    if (toolbar.contains(t)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (hovered) hovered.classList.remove(HL_CLASS);
+
+    // Gather full browser metadata
+    const { browser, os } = parseBrowserInfo();
+    const metadata = {
+      browser,
+      os,
+      userAgent: navigator.userAgent,
+      screenWidth: screen.width,
+      screenHeight: screen.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio,
+      url: window.location.href,
+      path: window.location.pathname,
+      referrer: document.referrer,
+      language: navigator.language,
+      cookiesEnabled: navigator.cookieEnabled,
+      timestamp: new Date().toISOString(),
+    };
+
+    void inspector.selectElement(t).then((capture) => {
+      // Augment the capture with full metadata before posting
+      const enriched = {
+        ...capture,
+        browserInfo: metadata,
+        consoleErrors: [...consoleErrors],
+      };
+      // Re-post enriched version (the Inspector class already posts basic, we override)
+      window.opener?.postMessage(
+        { type: "INSPECTOR_CAPTURE", payload: enriched },
+        portalOrigin
+      );
+      // Switch back to navigate mode after capture
+      setMode("navigate");
+    }).catch((err) => {
+      console.warn("[BugPixel] Capture failed, please retry:", err?.message ?? err);
+    });
+
+    void computeSelector(t);
+  }, true);
 }
 
 main();
