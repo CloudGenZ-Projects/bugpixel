@@ -520,6 +520,71 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
+  // === Admin: projects + websites ==========================================
+  app.get(
+    "/api/admin/projects",
+    requireAdmin,
+    asyncHandler((_req: Request, res: Response) => {
+      res.json({ projects: container.repos.projects.list() });
+    })
+  );
+
+  app.post(
+    "/api/admin/projects",
+    requireAdmin,
+    asyncHandler((req: Request, res: Response) => {
+      const { name } = req.body ?? {};
+      if (!name || typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "Project name is required."));
+      }
+      const project = container.repos.projects.create({ id: uuid(), name: name.trim() });
+      res.status(201).json({ project });
+    })
+  );
+
+  app.get(
+    "/api/admin/websites",
+    requireAdmin,
+    asyncHandler((_req: Request, res: Response) => {
+      const websites = container.repos.websites.listAll();
+      const enriched = websites.map((w) => {
+        const owner = container.repos.users.getById(w.ownerClientId);
+        const project = container.repos.projects.getById(w.projectId);
+        return { ...w, ownerEmail: owner?.email ?? "unknown", projectName: project?.name ?? "unknown" };
+      });
+      res.json({ websites: enriched });
+    })
+  );
+
+  app.post(
+    "/api/admin/websites",
+    requireAdmin,
+    asyncHandler((req: Request, res: Response) => {
+      const { name, url, projectId, ownerClientId } = req.body ?? {};
+      if (!name || !url || !projectId || !ownerClientId) {
+        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "name, url, projectId, and ownerClientId are required."));
+      }
+      const website = container.repos.websites.create({
+        id: uuid(),
+        projectId: String(projectId),
+        ownerClientId: String(ownerClientId),
+        name: String(name),
+        url: String(url),
+      });
+      res.status(201).json({ website });
+    })
+  );
+
+  // Get all clients (for website owner assignment)
+  app.get(
+    "/api/admin/clients",
+    requireAdmin,
+    asyncHandler((_req: Request, res: Response) => {
+      const clients = container.repos.users.listByRole(Role.Client);
+      res.json({ clients: clients.map((u) => ({ id: u.id, email: u.email })) });
+    })
+  );
+
   // Fallback 404 for unknown API routes.
   app.use("/api", (_req: Request, res: Response) => {
     res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));

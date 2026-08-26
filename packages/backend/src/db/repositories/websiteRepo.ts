@@ -40,6 +40,12 @@ export function makeWebsiteRepo(db: AppDatabase) {
         .all(ownerClientId) as Row[];
       return rows.map(mapWebsite);
     },
+
+    /** All websites (admin view). */
+    listAll(): Website[] {
+      const rows = db.prepare(`SELECT * FROM website ORDER BY name ASC`).all() as Row[];
+      return rows.map(mapWebsite);
+    },
   };
 }
 
