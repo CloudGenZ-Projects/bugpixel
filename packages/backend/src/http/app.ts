@@ -90,22 +90,54 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     next();
   });
 
-  // --- CORS for cross-origin callers ---------------------------------------
-  const allowedOrigins = new Set(options.allowedOrigins ?? []);
-  if (allowedOrigins.size > 0) {
-    app.use((req, res, next) => {
-      const origin = req.headers.origin;
-      if (origin && allowedOrigins.has(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Vary", "Origin");
-        res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
-        if (req.method === "OPTIONS") return res.status(204).end();
+  // --- CORS: dynamic origin allowlist from registered websites -------------
+  // Instead of a static env-var list, we check incoming Origin against the
+  // website.url column in the DB. Cached for 60s so it's not a DB hit per request.
+  let cachedOrigins: Set<string> | null = null;
+  let cacheExpiry = 0;
+
+  function getAllowedOrigins(): Set<string> {
+    const now = Date.now();
+    if (cachedOrigins && now < cacheExpiry) return cachedOrigins;
+    // Build set of origins from all registered website URLs
+    const websites = container.repos.websites.listAll();
+    const origins = new Set<string>();
+    // Also include any statically configured origins (fallback/override)
+    for (const o of options.allowedOrigins ?? []) {
+      if (o === "*") {
+        // Wildcard: allow all origins dynamically
+        cachedOrigins = new Set(["*"]);
+        cacheExpiry = now + 60_000;
+        return cachedOrigins;
       }
-      next();
-    });
+      origins.add(o);
+    }
+    for (const w of websites) {
+      try {
+        origins.add(new URL(w.url).origin);
+      } catch {
+        // skip malformed URLs
+      }
+    }
+    cachedOrigins = origins;
+    cacheExpiry = now + 60_000;
+    return origins;
   }
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (!origin) return next();
+    const allowed = getAllowedOrigins();
+    if (allowed.has("*") || allowed.has(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
+      if (req.method === "OPTIONS") return res.status(204).end();
+    }
+    next();
+  });
 
   const requireSession = makeRequireSession(container);
   const requireAdmin = [requireSession, makeRequireRole(container, Role.Admin)];
@@ -120,14 +152,14 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   function setSessionCookie(res: Response, sid: string) {
     res.cookie(SESSION_COOKIE, sid, {
       httpOnly: true,
-      sameSite: "strict",
-      secure: options.secureCookies ?? false,
+      sameSite: "none",
+      secure: true,
       path: "/",
     });
     res.cookie(CSRF_COOKIE, csrfTokenFor(sid, container.csrfSecret), {
       httpOnly: false,
-      sameSite: "strict",
-      secure: options.secureCookies ?? false,
+      sameSite: "none",
+      secure: true,
       path: "/",
     });
   }

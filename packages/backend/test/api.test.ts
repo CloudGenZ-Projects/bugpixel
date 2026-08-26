@@ -61,7 +61,7 @@ async function login(email: string, password: string): Promise<string> {
   expect(res.status).toBe(200);
   const cookies = res.headers["set-cookie"] as unknown as string[];
   expect(cookies[0]).toMatch(/HttpOnly/i);
-  expect(cookies[0]).toMatch(/SameSite=Strict/i);
+  expect(cookies[0]).toMatch(/SameSite=None/i);
   // Return all cookies (session + csrf) joined for use as a Cookie header.
   return cookies.map((c) => c.split(";")[0]).join("; ");
 }
