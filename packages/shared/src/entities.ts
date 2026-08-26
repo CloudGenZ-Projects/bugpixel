@@ -1,29 +1,22 @@
 /**
- * Shared entity interfaces for the Change Request Portal.
- *
- * These mirror the SQLite data model / ERD in the design document. All ids are
- * UUID strings and all timestamps are ISO-8601 text.
+ * Shared entity interfaces for BugPixel (v2 - flattened model).
  */
 
 import type { ChangeRequestStatus, ChangeType, Priority, Role } from "./enums.js";
 
-/** Any authenticated actor of the Portal. Holds exactly one role. */
 export interface User {
   id: string;
   email: string;
-  /** Strong password hash (bcrypt/argon2). Never plaintext. */
   passwordHash: string;
   role: Role;
   createdAt: string;
 }
 
-/** The unit of work associated with a Website; Developers are assigned to it. */
 export interface Project {
   id: string;
   name: string;
 }
 
-/** A site built and hosted by the portal owner, owned by a specific Client. */
 export interface Website {
   id: string;
   projectId: string;
@@ -32,7 +25,6 @@ export interface Website {
   url: string;
 }
 
-/** An Admin-managed association between a Developer and a Project. */
 export interface Assignment {
   id: string;
   projectId: string;
@@ -40,77 +32,52 @@ export interface Assignment {
   createdAt: string;
 }
 
-/** A submitted report composed of one or more Change_Items against one Website. */
+/** A single change request = one thing to change on one website. */
 export interface ChangeRequest {
   id: string;
   websiteId: string;
   clientId: string;
   status: ChangeRequestStatus;
   priority: Priority;
+  changeType: ChangeType;
+  description: string;
+  contentAdd?: string | null;
+  contentCurrent?: string | null;
+  contentUpdated?: string | null;
+  contentDelete?: string | null;
+  selector?: string | null;
+  htmlMeta?: string | null;
   createdAt: string;
-  /** Set when the request is submitted; null/undefined while a Draft. */
-  submittedAt?: string | null;
-  /** Optional due date for the change request. */
   dueDate?: string | null;
 }
 
-/**
- * A single requested change within a Change_Request. Only the content columns
- * relevant to `changeType` are populated.
- */
-export interface ChangeItem {
-  id: string;
-  changeRequestId: string;
-  changeType: ChangeType;
-  description: string;
-  /** Content to add (Add). */
-  contentAdd?: string | null;
-  /** Current value (Update). */
-  contentCurrent?: string | null;
-  /** Updated value (Update). */
-  contentUpdated?: string | null;
-  /** Content to remove (Delete). */
-  contentDelete?: string | null;
-  createdAt: string;
-}
-
-/**
- * The recorded identifier of the selected on-page component. A Screenshot is the
- * required capture; selector/HTML metadata are optional.
- */
-export interface ComponentReference {
-  id: string;
-  changeItemId: string;
-  selector?: string | null;
-  htmlMeta?: string | null;
-}
-
-/** An image of the page captured at selection time, with a highlighted region. */
+/** A screenshot attached to a change request. Multiple allowed. */
 export interface Screenshot {
   id: string;
-  changeItemId: string;
+  changeRequestId: string;
   storageKey: string;
   mime: string;
   width: number;
   height: number;
+  createdAt: string;
 }
 
-/** An optional PDF or image file added to an Add or Update Change_Item. */
+/** An optional file attachment on a request. */
 export interface Attachment {
   id: string;
-  changeItemId: string;
+  changeRequestId: string;
   storageKey: string;
   filename: string;
-  /** Restricted to PDF or image types. */
   mime: string;
   sizeBytes: number;
 }
 
-/** A comment/note on a change request (client<->developer conversation). */
+/** A comment/note on a change request. Supports optional image. */
 export interface Note {
   id: string;
   changeRequestId: string;
   authorId: string;
   content: string;
+  imageStorageKey?: string | null;
   createdAt: string;
 }
