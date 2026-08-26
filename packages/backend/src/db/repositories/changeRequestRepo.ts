@@ -10,7 +10,7 @@ export interface CreateChangeRequestInput {
   websiteId: string;
   clientId: string;
   status: ChangeRequestStatus;
-  priority: Priority;
+  priority?: Priority;
   createdAt: string;
   submittedAt?: string | null;
   dueDate?: string | null;
@@ -35,7 +35,7 @@ export function makeChangeRequestRepo(db: AppDatabase) {
         input.websiteId,
         input.clientId,
         input.status,
-        input.priority,
+        input.priority ?? "Medium",
         input.createdAt,
         input.submittedAt ?? null,
         input.dueDate ?? null
