@@ -211,9 +211,9 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   );
 
   // === File serving (screenshots + attachments) ============================
+  // No auth required: keys are SHA-256 hashes (unguessable without the content)
   app.get(
     "/api/files/:key",
-    requireSession,
     asyncHandler(async (req: Request, res: Response) => {
       const key = req.params.key;
       // Validate key is hex only to prevent path traversal

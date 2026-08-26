@@ -8,6 +8,7 @@ import type { ChangeRequest } from "@crp/shared";
 import { endpoints } from "../api/endpoints.js";
 
 const STATUS_COLUMNS = [
+  { key: "Draft", label: "Drafts", color: "bg-gray-100 text-gray-600" },
   { key: "Submitted", label: "Submitted", color: "bg-blue-100 text-blue-800" },
   { key: "InProgress", label: "In Progress", color: "bg-yellow-100 text-yellow-800" },
   { key: "Done", label: "Done", color: "bg-green-100 text-green-800" },
@@ -42,9 +43,9 @@ export function ClientDashboard() {
   }));
 
   // Include AwaitingDeveloperAssignment in Submitted column
-  grouped[0].items = [
+  grouped[1].items = [
     ...requests.filter((r) => r.status === "AwaitingDeveloperAssignment"),
-    ...grouped[0].items,
+    ...grouped[1].items,
   ];
 
   return (
@@ -72,7 +73,7 @@ export function ClientDashboard() {
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {grouped.map((col) => (
             <div key={col.key} className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-center justify-between mb-3">

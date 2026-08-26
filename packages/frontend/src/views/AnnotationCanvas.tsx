@@ -87,8 +87,14 @@ export function AnnotationCanvas({ imageDataUrl, width, height, onConfirm, onCan
   useEffect(() => { redraw(); }, [redraw]);
 
   function getPos(e: React.MouseEvent): Point {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
+    };
   }
 
   function onMouseDown(e: React.MouseEvent) {

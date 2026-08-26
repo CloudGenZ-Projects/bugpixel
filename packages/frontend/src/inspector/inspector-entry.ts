@@ -17,6 +17,8 @@ import {
 } from "./inspector.js";
 
 function resolvePortalOrigin(): string {
+  // Check global config set by config.js (loaded before this script)
+  if ((window as any).__BUGPIXEL__?.portalOrigin) return (window as any).__BUGPIXEL__.portalOrigin;
   const el = document.currentScript as HTMLScriptElement | null;
   const attr = el?.getAttribute("data-portal-origin");
   if (attr) return attr;
@@ -27,8 +29,15 @@ function resolvePortalOrigin(): string {
 }
 
 function resolveWebsiteId(): string {
+  if ((window as any).__BUGPIXEL__?.websiteId) return (window as any).__BUGPIXEL__.websiteId;
   const el = document.currentScript as HTMLScriptElement | null;
   return el?.getAttribute("data-website-id") ?? "";
+}
+
+/** Resolve API origin - defaults to portal origin (same in production) */
+function resolveApiOrigin(): string {
+  const el = document.currentScript as HTMLScriptElement | null;
+  return el?.getAttribute("data-api-origin") ?? (window as any).__BUGPIXEL__?.apiOrigin ?? resolvePortalOrigin();
 }
 
 /** Parse user agent into readable browser + OS names */
@@ -54,8 +63,12 @@ function parseBrowserInfo() {
   return { browser, os };
 }
 
-/** Capture screenshot with highlight overlay */
+/** Capture screenshot with highlight overlay - hides toolbar first */
 const captureWithHighlight: CaptureFn = async (el: Element): Promise<ScreenshotResult> => {
+  // Hide the BugPixel toolbar so it doesn't appear in the screenshot
+  const toolbar = document.getElementById("__bugpixel_toolbar__");
+  if (toolbar) toolbar.style.display = "none";
+
   const rect = el.getBoundingClientRect();
   const overlay = document.createElement("div");
   Object.assign(overlay.style, {
@@ -76,6 +89,8 @@ const captureWithHighlight: CaptureFn = async (el: Element): Promise<ScreenshotR
     return { dataUrl, mime: "image/png", width: canvas.width, height: canvas.height };
   } finally {
     overlay.remove();
+    // Restore toolbar
+    if (toolbar) toolbar.style.display = "flex";
   }
 };
 
@@ -103,6 +118,8 @@ function main(): void {
     return;
   }
 
+  const apiOrigin = resolveApiOrigin();
+
   // Capture console errors for debugging context
   const consoleErrors: string[] = [];
   const originalError = console.error;
@@ -120,7 +137,7 @@ function main(): void {
     portalOrigin,
     websiteId,
     captureScreenshot: captureWithHighlight,
-    validateToken: (token, wid) => validateToken(portalOrigin, token, wid),
+    validateToken: (token, wid) => validateToken(apiOrigin, token, wid),
   });
   inspector.start();
 
@@ -242,8 +259,8 @@ function main(): void {
         { type: "INSPECTOR_CAPTURE", payload: enriched },
         portalOrigin
       );
-      // Switch back to navigate mode after capture
-      setMode("navigate");
+      // Close the popup after successful capture
+      setTimeout(() => window.close(), 300);
     }).catch((err) => {
       console.warn("[BugPixel] Capture failed, please retry:", err?.message ?? err);
     });

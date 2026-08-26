@@ -66,7 +66,8 @@ export function makeCsrf(secret: string, exemptPaths: string[] = []) {
   const safe = new Set(["GET", "HEAD", "OPTIONS"]);
   return function csrf(req: Request, res: Response, next: NextFunction) {
     if (safe.has(req.method)) return next();
-    if (exemptPaths.includes(req.path)) return next();
+    // Check both req.path and req.url since Express path stripping varies by mount
+    if (exemptPaths.some(p => req.path === p || req.url === p || req.originalUrl?.endsWith(p))) return next();
     const sid = req.cookies?.[SESSION_COOKIE];
     // No session yet (e.g. login) -> nothing to protect; let auth handle it.
     if (!sid) return next();
