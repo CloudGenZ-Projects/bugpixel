@@ -13,7 +13,12 @@ import { endpoints } from "../src/api/endpoints.js";
 import type { CapturedSelection } from "../src/inspector/WebsiteOpenController.js";
 
 vi.mock("../src/api/endpoints.js", () => ({
-  endpoints: { addItem: vi.fn(), submit: vi.fn() },
+  endpoints: {
+    uploadScreenshot: vi.fn(),
+    addItem: vi.fn(),
+    uploadAttachment: vi.fn(),
+    submit: vi.fn(),
+  },
 }));
 
 const website = { id: "w1", projectId: "p", ownerClientId: "c", name: "Site", url: "https://s.example.com" };
@@ -59,6 +64,9 @@ describe("ChangeComposer (Req 8.5, 8.6, 10.4)", () => {
   });
 
   it("adds a valid item, enabling Submit afterwards", async () => {
+    (endpoints.uploadScreenshot as ReturnType<typeof vi.fn>).mockResolvedValue({
+      storageKey: "sk-1",
+    });
     (endpoints.addItem as ReturnType<typeof vi.fn>).mockResolvedValue({ item: { id: "i1" } });
     renderComposer();
 
@@ -68,7 +76,11 @@ describe("ChangeComposer (Req 8.5, 8.6, 10.4)", () => {
 
     // Item added -> count increments and Submit is enabled.
     expect(await screen.findByText("1")).toBeInTheDocument();
+    // Screenshot uploaded first, then the item created with the real key.
+    expect(endpoints.uploadScreenshot).toHaveBeenCalledTimes(1);
     expect(endpoints.addItem).toHaveBeenCalledTimes(1);
+    const addItemBody = (endpoints.addItem as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(addItemBody.screenshot.storageKey).toBe("sk-1");
     const submit = screen.getByRole("button", { name: /submit change request/i });
     expect(submit).toBeEnabled();
   });

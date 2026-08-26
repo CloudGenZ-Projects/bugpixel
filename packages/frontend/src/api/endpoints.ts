@@ -59,6 +59,22 @@ export const endpoints = {
     api.post<{ changeRequest: ChangeRequest }>("/api/change-requests", { websiteId }),
   addItem: (requestId: string, body: AddItemBody) =>
     api.post<{ item: ChangeItem }>(`/api/change-requests/${requestId}/items`, body),
+  uploadScreenshot: (requestId: string, dataBase64: string, mime: string) =>
+    api.post<{ storageKey: string }>(
+      `/api/change-requests/${requestId}/screenshots`,
+      { dataBase64, mime }
+    ),
+  uploadAttachment: (
+    requestId: string,
+    itemId: string,
+    dataBase64: string,
+    mime: string,
+    filename: string
+  ) =>
+    api.post<{ attachment: { id: string; filename: string; mime: string; sizeBytes: number } }>(
+      `/api/change-requests/${requestId}/items/${itemId}/attachments`,
+      { dataBase64, mime, filename }
+    ),
   submit: (requestId: string) =>
     api.post<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/submit`),
 

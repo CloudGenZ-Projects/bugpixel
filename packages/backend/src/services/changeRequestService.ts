@@ -14,6 +14,7 @@ import { v4 as uuid } from "uuid";
 import {
   ChangeRequestStatus,
   MAX_ITEMS_PER_REQUEST,
+  type Attachment,
   type ChangeItem,
   type ChangeRequest,
   type ChangeType,
@@ -24,6 +25,8 @@ import { systemClock } from "./clock.js";
 import { ServiceError } from "./serviceError.js";
 import type { ChangeItemValidator } from "./changeItemValidator.js";
 import type { OwnershipService } from "./ownershipService.js";
+import type { FileStore } from "./fileStore.js";
+import { validateAttachment } from "./fileStore.js";
 
 /** Component selection captured by the inspector for an item. */
 export interface ComponentSelectionInput {
@@ -54,16 +57,44 @@ export interface ChangeRequestService {
   createDraft(clientId: string, websiteId: string): ChangeRequest;
   addItem(clientId: string, requestId: string, input: AddItemInput): ChangeItem;
   submit(clientId: string, requestId: string): ChangeRequest;
+  /** Store screenshot bytes for a request and return the opaque storage key. */
+  storeScreenshot(
+    clientId: string,
+    requestId: string,
+    bytes: Uint8Array,
+    mime: string
+  ): string;
+  /** Validate + store an attachment blob and link it to an item. */
+  addAttachment(
+    clientId: string,
+    requestId: string,
+    itemId: string,
+    bytes: Uint8Array,
+    mime: string,
+    filename: string
+  ): Attachment;
 }
 
 export function makeChangeRequestService(
   repos: Repositories,
   validator: ChangeItemValidator,
   ownership: OwnershipService,
-  clock: Clock = systemClock
+  clock: Clock = systemClock,
+  fileStore?: FileStore
 ): ChangeRequestService {
   function nowIso(): string {
     return new Date(clock.now()).toISOString();
+  }
+
+  function requireFileStore(): FileStore {
+    if (!fileStore) {
+      throw new ServiceError(
+        "SUBMISSION_FAILED",
+        500,
+        "File storage is not configured."
+      );
+    }
+    return fileStore;
   }
 
   /** Load a draft owned by the client, or throw. */
@@ -187,6 +218,44 @@ export function makeChangeRequestService(
       }
 
       return repos.changeRequests.getById(cr.id)!;
+    },
+
+    storeScreenshot(clientId, requestId, bytes, mime) {
+      loadOwnedDraft(clientId, requestId);
+      const store = requireFileStore();
+      // Screenshots are images; validate as an attachment (PDF/image + size).
+      return store.write(bytes, mime, "screenshot.png", { validate: true });
+    },
+
+    addAttachment(clientId, requestId, itemId, bytes, mime, filename) {
+      loadOwnedDraft(clientId, requestId);
+
+      // The item must belong to this request.
+      const item = repos.changeItems.getById(itemId);
+      if (!item || item.changeRequestId !== requestId) {
+        throw new ServiceError(
+          "AUTHZ_NOT_OWNER",
+          403,
+          "This item does not belong to the change request."
+        );
+      }
+
+      // Attachments are only permitted for Add/Update items (Req 8.8, 9.5).
+      validator.assertAttachmentAllowed(item.changeType);
+
+      // Validate MIME + size, then persist the blob and link it.
+      validateAttachment(mime, bytes.byteLength);
+      const store = requireFileStore();
+      const storageKey = store.write(bytes, mime, filename, { validate: true });
+
+      return repos.attachments.create({
+        id: uuid(),
+        changeItemId: itemId,
+        storageKey,
+        filename,
+        mime,
+        sizeBytes: bytes.byteLength,
+      });
     },
   };
 }

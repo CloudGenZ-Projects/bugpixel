@@ -48,6 +48,20 @@ function nonBlankWithin(value: string, max: number): boolean {
   return value.trim().length > 0 && value.length <= max;
 }
 
+/** Read a File's contents as a base64 string (no data-URL prefix). */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function ChangeComposer({
   website,
   draft,
@@ -64,6 +78,7 @@ export function ChangeComposer({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [itemCount, setItemCount] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   function resetForm() {
     setDescription("");
@@ -95,7 +110,7 @@ export function ChangeComposer({
     return Object.keys(e).length > 0 ? e : null;
   }
 
-  async function onAddItem(continueAfter: boolean) {
+  async function onAddItem() {
     const invalid = validate();
     if (invalid) {
       setErrors(invalid); // values are retained in state (Req 8.5, 8.6)
@@ -106,34 +121,46 @@ export function ChangeComposer({
       return;
     }
 
-    const body: AddItemBody = {
-      changeType,
-      description,
-      contentAdd: changeType === ChangeType.Add ? contentAdd : null,
-      contentDelete: changeType === ChangeType.Delete ? contentDelete : null,
-      contentCurrent: changeType === ChangeType.Update ? contentCurrent : null,
-      contentUpdated: changeType === ChangeType.Update ? contentUpdated : null,
-      component: {
-        selector: latestCapture.selector,
-        htmlMeta: latestCapture.htmlMeta,
-      },
-      screenshot: {
-        storageKey: latestCapture.screenshot.dataUrl,
-        mime: latestCapture.screenshot.mime,
-        width: latestCapture.screenshot.width,
-        height: latestCapture.screenshot.height,
-      },
-    };
-
     setBusy(true);
     try {
-      await endpoints.addItem(draft.id, body);
+      // 1. Upload the captured screenshot bytes and get a real storage key.
+      const { storageKey } = await endpoints.uploadScreenshot(
+        draft.id,
+        latestCapture.screenshot.dataUrl,
+        latestCapture.screenshot.mime
+      );
+
+      // 2. Create the item referencing the stored screenshot.
+      const body: AddItemBody = {
+        changeType,
+        description,
+        contentAdd: changeType === ChangeType.Add ? contentAdd : null,
+        contentDelete: changeType === ChangeType.Delete ? contentDelete : null,
+        contentCurrent: changeType === ChangeType.Update ? contentCurrent : null,
+        contentUpdated: changeType === ChangeType.Update ? contentUpdated : null,
+        component: {
+          selector: latestCapture.selector,
+          htmlMeta: latestCapture.htmlMeta,
+        },
+        screenshot: {
+          storageKey,
+          mime: latestCapture.screenshot.mime,
+          width: latestCapture.screenshot.width,
+          height: latestCapture.screenshot.height,
+        },
+      };
+      const { item } = await endpoints.addItem(draft.id, body);
+
+      // 3. Upload any accepted attachments (Add/Update only).
+      for (const file of pendingFiles) {
+        const b64 = await fileToBase64(file);
+        await endpoints.uploadAttachment(draft.id, item.id, b64, file.type, file.name);
+      }
+
       setItemCount((n) => n + 1);
+      setPendingFiles([]);
       onConsumedCapture();
       resetForm();
-      if (!continueAfter) {
-        // Nothing else; the client can now submit or add another.
-      }
     } catch (err) {
       const message =
         err instanceof ApiClientError ? err.message : "Could not add the change item.";
@@ -168,7 +195,7 @@ export function ChangeComposer({
         aria-label="change item form"
         onSubmit={(e) => {
           e.preventDefault();
-          void onAddItem(true);
+          void onAddItem();
         }}
       >
         <label>
@@ -241,15 +268,15 @@ export function ChangeComposer({
         )}
 
         {/* Attachments only for Add/Update (hidden for Delete). */}
-        <AttachmentInput changeType={changeType} onFilesAccepted={() => {}} />
+        <AttachmentInput changeType={changeType} onFilesAccepted={setPendingFiles} />
 
         {errors.form && <p role="alert">{errors.form}</p>}
 
         <div>
-          <button type="button" disabled={busy} onClick={() => void onAddItem(false)}>
+          <button type="button" disabled={busy} onClick={() => void onAddItem()}>
             Done (add item)
           </button>
-          <button type="button" disabled={busy} onClick={() => void onAddItem(true)}>
+          <button type="button" disabled={busy} onClick={() => void onAddItem()}>
             Add another
           </button>
         </div>

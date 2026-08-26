@@ -13,6 +13,7 @@ import cookieParser from "cookie-parser";
 
 import { Role, makeApiError } from "@crp/shared";
 import type { Container } from "../container.js";
+import { ServiceError } from "../services/serviceError.js";
 import {
   SESSION_COOKIE,
   asyncHandler,
@@ -34,6 +35,24 @@ export interface AppOptions {
   spaDir?: string;
   /** Absolute path to the built inspector script directory (optional). */
   inspectorDir?: string;
+}
+
+/**
+ * Decode a base64 or data-URL image/file payload into raw bytes. Accepts either
+ * a bare base64 string or a `data:<mime>;base64,<data>` data URL.
+ */
+function decodeBase64Payload(input: unknown): Uint8Array {
+  if (typeof input !== "string" || input.length === 0) {
+    throw new ServiceError(
+      "VALIDATION_UNSUPPORTED_TYPE",
+      400,
+      "A base64 file payload is required.",
+      "attachment"
+    );
+  }
+  const comma = input.indexOf(",");
+  const base64 = input.startsWith("data:") && comma >= 0 ? input.slice(comma + 1) : input;
+  return new Uint8Array(Buffer.from(base64, "base64"));
 }
 
 export function makeApp(container: Container, options: AppOptions = {}) {
@@ -166,6 +185,44 @@ export function makeApp(container: Container, options: AppOptions = {}) {
         req.body
       );
       res.status(201).json({ item });
+    })
+  );
+
+  // Upload a captured screenshot blob; returns the opaque storage key the
+  // client then includes in the addItem body (Req 7.3).
+  app.post(
+    "/api/change-requests/:id/screenshots",
+    requireClient,
+    asyncHandler((req: Request, res: Response) => {
+      const { dataBase64, mime } = req.body ?? {};
+      const bytes = decodeBase64Payload(dataBase64);
+      const storageKey = container.changeRequests.storeScreenshot(
+        req.session!.userId,
+        req.params.id,
+        bytes,
+        String(mime ?? "image/png")
+      );
+      res.status(201).json({ storageKey });
+    })
+  );
+
+  // Upload an attachment for an item (Add/Update only); validated + persisted
+  // (Req 9.1-9.4).
+  app.post(
+    "/api/change-requests/:id/items/:itemId/attachments",
+    requireClient,
+    asyncHandler((req: Request, res: Response) => {
+      const { dataBase64, mime, filename } = req.body ?? {};
+      const bytes = decodeBase64Payload(dataBase64);
+      const attachment = container.changeRequests.addAttachment(
+        req.session!.userId,
+        req.params.id,
+        req.params.itemId,
+        bytes,
+        String(mime ?? "application/octet-stream"),
+        String(filename ?? "attachment")
+      );
+      res.status(201).json({ attachment });
     })
   );
 

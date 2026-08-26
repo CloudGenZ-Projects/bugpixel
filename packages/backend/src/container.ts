@@ -79,8 +79,14 @@ export function makeContainer(config: ContainerConfig): Container {
     clock
   );
   const validator = makeChangeItemValidator();
-  const changeRequests = makeChangeRequestService(repos, validator, ownership, clock);
   const fileStore = makeFileStore(config.storageRoot);
+  const changeRequests = makeChangeRequestService(
+    repos,
+    validator,
+    ownership,
+    clock,
+    fileStore
+  );
   const roster = makeRosterService(repos.users, repos.assignments, sessions, clock);
   const assignments = makeAssignmentService(repos.users, repos.assignments, clock);
   const listing = makeListingService(repos, ownership);
