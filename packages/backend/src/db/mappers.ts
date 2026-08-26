@@ -1,16 +1,16 @@
 /**
  * Row-mapping helpers between snake_case SQLite columns and the camelCase
  * `@crp/shared` entity interfaces.
+ *
+ * v2 - flattened model (no change_items, no component_references).
  */
 import type {
   Assignment,
-  ChangeItem,
+  Attachment,
   ChangeRequest,
-  ComponentReference,
   Note,
   Project,
   Screenshot,
-  Attachment,
   User,
   Website,
 } from "@crp/shared";
@@ -69,50 +69,35 @@ export function mapChangeRequest(r: Row): ChangeRequest {
     clientId: str(r.client_id),
     status: str(r.status) as ChangeRequestStatus,
     priority: (str(r.priority) || "Medium") as Priority,
-    createdAt: str(r.created_at),
-    submittedAt: strOrNull(r.submitted_at),
-    dueDate: strOrNull(r.due_date),
-  };
-}
-
-export function mapChangeItem(r: Row): ChangeItem {
-  return {
-    id: str(r.id),
-    changeRequestId: str(r.change_request_id),
     changeType: str(r.change_type) as ChangeType,
     description: str(r.description),
     contentAdd: strOrNull(r.content_add),
     contentCurrent: strOrNull(r.content_current),
     contentUpdated: strOrNull(r.content_updated),
     contentDelete: strOrNull(r.content_delete),
-    createdAt: str(r.created_at),
-  };
-}
-
-export function mapComponentReference(r: Row): ComponentReference {
-  return {
-    id: str(r.id),
-    changeItemId: str(r.change_item_id),
     selector: strOrNull(r.selector),
     htmlMeta: strOrNull(r.html_meta),
+    createdAt: str(r.created_at),
+    dueDate: strOrNull(r.due_date),
   };
 }
 
 export function mapScreenshot(r: Row): Screenshot {
   return {
     id: str(r.id),
-    changeItemId: str(r.change_item_id),
+    changeRequestId: str(r.change_request_id),
     storageKey: str(r.storage_key),
     mime: str(r.mime),
     width: num(r.width),
     height: num(r.height),
+    createdAt: str(r.created_at),
   };
 }
 
 export function mapAttachment(r: Row): Attachment {
   return {
     id: str(r.id),
-    changeItemId: str(r.change_item_id),
+    changeRequestId: str(r.change_request_id),
     storageKey: str(r.storage_key),
     filename: str(r.filename),
     mime: str(r.mime),
@@ -126,6 +111,28 @@ export function mapNote(r: Row): Note {
     changeRequestId: str(r.change_request_id),
     authorId: str(r.author_id),
     content: str(r.content),
+    imageStorageKey: strOrNull(r.image_storage_key),
+    createdAt: str(r.created_at),
+  };
+}
+
+/** Activity log row (no shared type - backend-only). */
+export interface Activity {
+  id: string;
+  changeRequestId: string;
+  actorId: string;
+  action: string;
+  detail: string | null;
+  createdAt: string;
+}
+
+export function mapActivity(r: Row): Activity {
+  return {
+    id: str(r.id),
+    changeRequestId: str(r.change_request_id),
+    actorId: str(r.actor_id),
+    action: str(r.action),
+    detail: strOrNull(r.detail),
     createdAt: str(r.created_at),
   };
 }

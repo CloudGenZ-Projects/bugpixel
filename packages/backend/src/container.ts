@@ -1,5 +1,5 @@
 /**
- * Dependency container: wires repositories and services.
+ * Dependency container (v2 - no validator, no changeItems).
  */
 import type { AppDatabase } from "./db/createDb.js";
 import { makeRepositories, type Repositories } from "./db/repositories/index.js";
@@ -11,7 +11,6 @@ import {
   makeAuthzService,
   makeOwnershipService,
   makeInspectorTokenService,
-  makeChangeItemValidator,
   makeChangeRequestService,
   makeFileStore,
   makeRosterService,
@@ -23,7 +22,6 @@ import {
   type AuthzService,
   type OwnershipService,
   type InspectorTokenService,
-  type ChangeItemValidator,
   type ChangeRequestService,
   type FileStore,
   type RosterService,
@@ -39,7 +37,6 @@ export interface ContainerConfig {
   storageRoot: string;
   clock?: Clock;
   bcryptRounds?: number;
-  /** When provided, use Cloudflare R2 for blob storage instead of local FS. */
   r2Config?: R2Config;
 }
 
@@ -51,7 +48,6 @@ export interface Container {
   authz: AuthzService;
   ownership: OwnershipService;
   inspectorTokens: InspectorTokenService;
-  validator: ChangeItemValidator;
   changeRequests: ChangeRequestService;
   fileStore: FileStore;
   roster: RosterService;
@@ -59,7 +55,6 @@ export interface Container {
   listing: ListingService;
   websites: WebsiteService;
   csrfSecret: string;
-  /** Async R2 operations (null when using local FS). */
   r2Ops: ReturnType<typeof makeR2AsyncOps> | null;
 }
 
@@ -67,7 +62,6 @@ export function makeContainer(config: ContainerConfig): Container {
   const clock = config.clock ?? systemClock;
   const repos = makeRepositories(config.db);
 
-  // File store: R2 if configured, otherwise local filesystem
   const fileStore = config.r2Config
     ? makeR2FileStore(config.r2Config)
     : makeFileStore(config.storageRoot);
@@ -88,14 +82,7 @@ export function makeContainer(config: ContainerConfig): Container {
     ownership,
     clock
   );
-  const validator = makeChangeItemValidator();
-  const changeRequests = makeChangeRequestService(
-    repos,
-    validator,
-    ownership,
-    clock,
-    fileStore
-  );
+  const changeRequests = makeChangeRequestService(repos, ownership, clock, fileStore);
   const roster = makeRosterService(repos.users, repos.assignments, sessions, clock);
   const assignments = makeAssignmentService(repos.users, repos.assignments, clock);
   const listing = makeListingService(repos, ownership);
@@ -109,7 +96,6 @@ export function makeContainer(config: ContainerConfig): Container {
     authz,
     ownership,
     inspectorTokens,
-    validator,
     changeRequests,
     fileStore,
     roster,

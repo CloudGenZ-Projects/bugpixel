@@ -1,259 +1,245 @@
 /**
- * Change-request composition service.
- *
- * `createDraft` binds a new Draft change request to exactly one website the
- * client owns (Req 4.4, ownership per 15.4). `addItem` validates and appends a
- * Change_Item in order, persisting its required Component_Reference and
- * Screenshot and (optionally) the selector/HTML metadata; all items belong to
- * the request's single website (Req 5.4, 8.9, 10.1, 10.2, 10.3).
- *
- * Requirements: 4.4, 5.4, 8.9, 10.1, 10.2, 10.3
+ * Change Request Service (v2 - single create = immediate submit, no draft).
  */
 import { v4 as uuid } from "uuid";
-
 import {
   ChangeRequestStatus,
-  MAX_ITEMS_PER_REQUEST,
-  Priority,
+  MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_SCREENSHOTS_PER_REQUEST,
   type Attachment,
-  type ChangeItem,
   type ChangeRequest,
   type ChangeType,
+  type Note,
+  type Priority,
+  type Screenshot,
 } from "@crp/shared";
 import type { Repositories } from "../db/repositories/index.js";
 import type { Clock } from "./clock.js";
 import { systemClock } from "./clock.js";
 import { ServiceError } from "./serviceError.js";
-import type { ChangeItemValidator } from "./changeItemValidator.js";
 import type { OwnershipService } from "./ownershipService.js";
 import type { FileStore } from "./fileStore.js";
-import { validateAttachment } from "./fileStore.js";
 
-/** Component selection captured by the inspector for an item. */
-export interface ComponentSelectionInput {
-  selector?: string | null;
-  htmlMeta?: string | null;
-}
-
-/** A captured screenshot for an item (bytes already written to the file store). */
-export interface ScreenshotInput {
-  storageKey: string;
-  mime: string;
-  width: number;
-  height: number;
-}
-
-export interface AddItemInput {
+export interface CreateChangeRequestInput {
+  websiteId: string;
   changeType: ChangeType;
   description: string;
+  priority?: Priority;
   contentAdd?: string | null;
   contentCurrent?: string | null;
   contentUpdated?: string | null;
   contentDelete?: string | null;
-  component: ComponentSelectionInput;
-  screenshot: ScreenshotInput;
+  selector?: string | null;
+  htmlMeta?: string | null;
+  dueDate?: string | null;
 }
 
 export interface ChangeRequestService {
-  createDraft(clientId: string, websiteId: string): ChangeRequest;
-  addItem(clientId: string, requestId: string, input: AddItemInput): ChangeItem;
-  submit(clientId: string, requestId: string): ChangeRequest;
-  /** Store screenshot bytes for a request and return the opaque storage key. */
-  storeScreenshot(
-    clientId: string,
+  create(clientId: string, input: CreateChangeRequestInput): ChangeRequest;
+  updateStatus(
+    actorId: string,
+    requestId: string,
+    newStatus: ChangeRequestStatus
+  ): ChangeRequest;
+  updatePriority(requestId: string, priority: Priority): void;
+  addScreenshot(
     requestId: string,
     bytes: Uint8Array,
-    mime: string
-  ): string;
-  /** Validate + store an attachment blob and link it to an item. */
+    mime: string,
+    width: number,
+    height: number
+  ): Screenshot;
   addAttachment(
-    clientId: string,
     requestId: string,
-    itemId: string,
     bytes: Uint8Array,
     mime: string,
     filename: string
   ): Attachment;
+  addNote(
+    requestId: string,
+    authorId: string,
+    content: string,
+    imageBytes?: Uint8Array | null,
+    imageMime?: string | null
+  ): Note;
 }
 
 export function makeChangeRequestService(
   repos: Repositories,
-  validator: ChangeItemValidator,
   ownership: OwnershipService,
   clock: Clock = systemClock,
-  fileStore?: FileStore
+  fileStore: FileStore
 ): ChangeRequestService {
-  function nowIso(): string {
-    return new Date(clock.now()).toISOString();
-  }
-
-  function requireFileStore(): FileStore {
-    if (!fileStore) {
-      throw new ServiceError("SUBMISSION_FAILED", 500, "File storage is not configured.");
-    }
-    return fileStore;
-  }
-
-  /** Load a draft owned by the client, or throw. */
-  function loadOwnedDraft(clientId: string, requestId: string): ChangeRequest {
-    const cr = repos.changeRequests.getById(requestId);
-    if (!cr || cr.clientId !== clientId) {
-      throw new ServiceError(
-        "AUTHZ_NOT_OWNER",
-        403,
-        "You do not own this change request."
-      );
-    }
+  function assertRequestExists(id: string): ChangeRequest {
+    const cr = repos.changeRequests.getById(id);
+    if (!cr) throw new ServiceError("NOT_FOUND", 404, "Change request not found.");
     return cr;
   }
 
+  function isoNow(): string {
+    return new Date(clock.now()).toISOString();
+  }
+
+  function validateDescription(description: string): void {
+    const trimmed = description.trim();
+    if (!trimmed) {
+      throw new ServiceError(
+        "VALIDATION_DESCRIPTION_REQUIRED",
+        400,
+        "Description is required."
+      );
+    }
+    if (trimmed.length > MAX_DESCRIPTION_LENGTH) {
+      throw new ServiceError(
+        "VALIDATION_DESCRIPTION_TOO_LONG",
+        400,
+        `Description must be at most ${MAX_DESCRIPTION_LENGTH} characters.`
+      );
+    }
+  }
+
+  function validateContent(value: string | null | undefined, fieldName: string): void {
+    if (value && value.length > MAX_CONTENT_LENGTH) {
+      throw new ServiceError(
+        "VALIDATION_CONTENT_TOO_LONG",
+        400,
+        `${fieldName} must be at most ${MAX_CONTENT_LENGTH} characters.`
+      );
+    }
+  }
+
   return {
-    createDraft(clientId, websiteId) {
-      // The client must own the target website (Req 4.2, 15.4).
-      ownership.assertOwns(clientId, websiteId);
-      return repos.changeRequests.create({
-        id: uuid(),
-        websiteId,
+    create(clientId, input) {
+      ownership.assertOwns(clientId, input.websiteId);
+      validateDescription(input.description);
+      validateContent(input.contentAdd, "contentAdd");
+      validateContent(input.contentCurrent, "contentCurrent");
+      validateContent(input.contentUpdated, "contentUpdated");
+      validateContent(input.contentDelete, "contentDelete");
+
+      const id = uuid();
+      const now = isoNow();
+
+      const cr = repos.changeRequests.create({
+        id,
+        websiteId: input.websiteId,
         clientId,
-        status: ChangeRequestStatus.Draft,
-        priority: Priority.Medium,
-        createdAt: nowIso(),
-        submittedAt: null,
-      });
-    },
-
-    addItem(clientId, requestId, input) {
-      const cr = loadOwnedDraft(clientId, requestId);
-
-      // Validate description + type-specific content (Req 8.1-8.6).
-      validator.validate(input);
-
-      // Persist the item, then its required component reference + screenshot so
-      // the item retains those associations (Req 8.9, Property 12). Content
-      // columns irrelevant to the type are left null.
-      const itemId = uuid();
-      const item = repos.changeItems.create({
-        id: itemId,
-        changeRequestId: cr.id,
+        status: ChangeRequestStatus.Submitted,
+        priority: input.priority,
         changeType: input.changeType,
-        description: input.description,
+        description: input.description.trim(),
         contentAdd: input.contentAdd ?? null,
         contentCurrent: input.contentCurrent ?? null,
         contentUpdated: input.contentUpdated ?? null,
         contentDelete: input.contentDelete ?? null,
-        createdAt: nowIso(),
+        selector: input.selector ?? null,
+        htmlMeta: input.htmlMeta ?? null,
+        createdAt: now,
+        dueDate: input.dueDate ?? null,
       });
 
-      repos.componentReferences.create({
+      repos.activities.create({
         id: uuid(),
-        changeItemId: itemId,
-        selector: input.component.selector ?? null,
-        htmlMeta: input.component.htmlMeta ?? null,
+        changeRequestId: id,
+        actorId: clientId,
+        action: "created",
+        detail: `Request created with status Submitted`,
+        createdAt: now,
       });
 
-      repos.screenshots.create({
+      return cr;
+    },
+
+    updateStatus(actorId, requestId, newStatus) {
+      const cr = assertRequestExists(requestId);
+      const oldStatus = cr.status;
+      if (oldStatus === newStatus) return cr;
+
+      repos.changeRequests.updateStatus(requestId, newStatus);
+      repos.activities.create({
         id: uuid(),
-        changeItemId: itemId,
-        storageKey: input.screenshot.storageKey,
-        mime: input.screenshot.mime,
-        width: input.screenshot.width,
-        height: input.screenshot.height,
+        changeRequestId: requestId,
+        actorId,
+        action: "status_changed",
+        detail: `${oldStatus} -> ${newStatus}`,
+        createdAt: isoNow(),
       });
 
-      return item;
+      return repos.changeRequests.getById(requestId)!;
     },
 
-    submit(clientId, requestId) {
-      const cr = loadOwnedDraft(clientId, requestId);
+    updatePriority(requestId, priority) {
+      assertRequestExists(requestId);
+      repos.changeRequests.updatePriority(requestId, priority);
+    },
 
-      // Item-count guard (Req 10.4, 11.1, 11.5). Checked before the transaction
-      // so the stored state is trivially unchanged on rejection.
-      const itemCount = repos.changeItems.countByRequest(cr.id);
-      if (itemCount === 0) {
+    addScreenshot(requestId, bytes, mime, width, height) {
+      assertRequestExists(requestId);
+      const count = repos.screenshots.countByRequest(requestId);
+      if (count >= MAX_SCREENSHOTS_PER_REQUEST) {
         throw new ServiceError(
-          "VALIDATION_NO_ITEMS",
+          "LIMIT_EXCEEDED",
           400,
-          "A change request must contain at least one change item."
-        );
-      }
-      if (itemCount > MAX_ITEMS_PER_REQUEST) {
-        throw new ServiceError(
-          "VALIDATION_TOO_MANY_ITEMS",
-          400,
-          `A change request may contain at most ${MAX_ITEMS_PER_REQUEST} change items.`
+          `Maximum ${MAX_SCREENSHOTS_PER_REQUEST} screenshots per request.`
         );
       }
 
-      // Determine routing: an active assignment on the website's project routes
-      // the request to Submitted; otherwise AwaitingDeveloperAssignment
-      // (Req 11.2-11.4, 11.6, 14.4).
-      const website = repos.websites.getById(cr.websiteId);
-      if (!website) {
-        throw new ServiceError(
-          "SUBMISSION_FAILED",
-          500,
-          "The change request could not be submitted."
-        );
-      }
-      const assignment = repos.assignments.getByProject(website.projectId);
-      const status = assignment
-        ? ChangeRequestStatus.Submitted
-        : ChangeRequestStatus.AwaitingDeveloperAssignment;
-      const submittedAt = nowIso();
-
-      // Persist status + timestamp atomically. Any failure rolls back leaving
-      // the stored state exactly as before (Req 11.7, Property 20).
-      try {
-        repos.transaction(() => {
-          repos.changeRequests.updateStatusAndSubmittedAt(cr.id, status, submittedAt);
-        });
-      } catch {
-        throw new ServiceError(
-          "SUBMISSION_FAILED",
-          500,
-          "The change request could not be submitted."
-        );
-      }
-
-      return repos.changeRequests.getById(cr.id)!;
+      const storageKey = fileStore.write(bytes, mime, "screenshot");
+      return repos.screenshots.create({
+        id: uuid(),
+        changeRequestId: requestId,
+        storageKey,
+        mime,
+        width,
+        height,
+        createdAt: isoNow(),
+      });
     },
 
-    storeScreenshot(clientId, requestId, bytes, mime) {
-      loadOwnedDraft(clientId, requestId);
-      const store = requireFileStore();
-      // Screenshots are images; validate as an attachment (PDF/image + size).
-      return store.write(bytes, mime, "screenshot.png", { validate: true });
-    },
-
-    addAttachment(clientId, requestId, itemId, bytes, mime, filename) {
-      loadOwnedDraft(clientId, requestId);
-
-      // The item must belong to this request.
-      const item = repos.changeItems.getById(itemId);
-      if (!item || item.changeRequestId !== requestId) {
-        throw new ServiceError(
-          "AUTHZ_NOT_OWNER",
-          403,
-          "This item does not belong to the change request."
-        );
-      }
-
-      // Attachments are only permitted for Add/Update items (Req 8.8, 9.5).
-      validator.assertAttachmentAllowed(item.changeType);
-
-      // Validate MIME + size, then persist the blob and link it.
-      validateAttachment(mime, bytes.byteLength);
-      const store = requireFileStore();
-      const storageKey = store.write(bytes, mime, filename, { validate: true });
-
+    addAttachment(requestId, bytes, mime, filename) {
+      assertRequestExists(requestId);
+      const storageKey = fileStore.write(bytes, mime, filename);
       return repos.attachments.create({
         id: uuid(),
-        changeItemId: itemId,
+        changeRequestId: requestId,
         storageKey,
         filename,
         mime,
-        sizeBytes: bytes.byteLength,
+        sizeBytes: bytes.length,
       });
+    },
+
+    addNote(requestId, authorId, content, imageBytes, imageMime) {
+      assertRequestExists(requestId);
+      if (!content.trim()) {
+        throw new ServiceError("VALIDATION_CONTENT_REQUIRED", 400, "Note content is required.");
+      }
+
+      let imageStorageKey: string | null = null;
+      if (imageBytes && imageMime) {
+        imageStorageKey = fileStore.write(imageBytes, imageMime, "note-image");
+      }
+
+      const note = repos.notes.create({
+        id: uuid(),
+        changeRequestId: requestId,
+        authorId,
+        content: content.trim(),
+        imageStorageKey,
+        createdAt: isoNow(),
+      });
+
+      repos.activities.create({
+        id: uuid(),
+        changeRequestId: requestId,
+        actorId: authorId,
+        action: "note_added",
+        detail: null,
+        createdAt: isoNow(),
+      });
+
+      return note;
     },
   };
 }

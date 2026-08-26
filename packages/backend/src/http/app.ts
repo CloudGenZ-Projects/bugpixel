@@ -1,12 +1,11 @@
 /**
- * Express application factory. Wires routes, applies auth/role middleware, and
- * installs security headers + error handler.
+ * Express application (v2 - flat change requests, per-project kanban API).
  */
 import express, { type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
 import { v4 as uuid } from "uuid";
 
-import { Role, ChangeRequestStatus, Priority, makeApiError } from "@crp/shared";
+import { Role, ChangeRequestStatus, Priority, ChangeType } from "@crp/shared";
 import type { Container } from "../container.js";
 import { ServiceError } from "../services/serviceError.js";
 import { makeRateLimiter } from "../services/rateLimiter.js";
@@ -15,10 +14,9 @@ import {
   CSRF_COOKIE,
   asyncHandler,
   errorHandler,
-  makeRequireRole,
   makeRequireSession,
+  makeRequireRole,
   makeCsrf,
-  makeValidateUpload,
   csrfTokenFor,
 } from "./middleware.js";
 
@@ -28,26 +26,12 @@ export interface AppOptions {
   spaDir?: string;
   inspectorDir?: string;
   allowedOrigins?: string[];
-}
-
-/** Escape HTML special characters to prevent XSS in rendered output. */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  storageRoot?: string;
 }
 
 function decodeBase64Payload(input: unknown): Uint8Array {
   if (typeof input !== "string" || input.length === 0) {
-    throw new ServiceError(
-      "VALIDATION_UNSUPPORTED_TYPE",
-      400,
-      "A base64 file payload is required.",
-      "attachment"
-    );
+    throw new ServiceError("VALIDATION_UNSUPPORTED_TYPE", 400, "A base64 file payload is required.");
   }
   const comma = input.indexOf(",");
   const base64 = input.startsWith("data:") && comma >= 0 ? input.slice(comma + 1) : input;
@@ -58,66 +42,41 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   const app = express();
   app.set("trust proxy", true);
 
-  // --- Rate limiters -------------------------------------------------------
   const loginLimiter = makeRateLimiter({ maxRequests: 5, windowMs: 60_000 });
   const apiLimiter = makeRateLimiter({ maxRequests: 100, windowMs: 60_000 });
 
-  // --- Security headers + HTTPS enforcement --------------------------------
-  app.use((req, res, next) => {
+  // Security headers
+  app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
-    if (options.enforceHttps) {
-      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-      const proto = req.headers["x-forwarded-proto"];
-      const isHttps = req.secure || proto === "https";
-      if (!isHttps) {
-        return res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
-      }
-    }
     next();
   });
 
   app.use(express.json({ limit: "15mb" }));
   app.use(cookieParser());
 
-  // --- Global API rate limit -----------------------------------------------
+  // Rate limit
   app.use("/api", (req, res, next) => {
-    const key = req.ip ?? "unknown";
-    if (!apiLimiter.allow(key)) {
-      return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many requests. Try again shortly." } });
+    if (!apiLimiter.allow(req.ip ?? "unknown")) {
+      return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many requests." } });
     }
     next();
   });
 
-  // --- CORS: dynamic origin allowlist from registered websites -------------
-  // Instead of a static env-var list, we check incoming Origin against the
-  // website.url column in the DB. Cached for 60s so it's not a DB hit per request.
+  // Dynamic CORS
   let cachedOrigins: Set<string> | null = null;
   let cacheExpiry = 0;
-
   function getAllowedOrigins(): Set<string> {
     const now = Date.now();
     if (cachedOrigins && now < cacheExpiry) return cachedOrigins;
-    // Build set of origins from all registered website URLs
-    const websites = container.repos.websites.listAll();
+    const rows = container.repos.websites.listAll();
     const origins = new Set<string>();
-    // Also include any statically configured origins (fallback/override)
-    for (const o of options.allowedOrigins ?? []) {
-      if (o === "*") {
-        // Wildcard: allow all origins dynamically
-        cachedOrigins = new Set(["*"]);
-        cacheExpiry = now + 60_000;
-        return cachedOrigins;
-      }
-      origins.add(o);
+    for (const w of rows) {
+      try { origins.add(new URL(w.url).origin); } catch {}
     }
-    for (const w of websites) {
-      try {
-        origins.add(new URL(w.url).origin);
-      } catch {
-        // skip malformed URLs
-      }
+    if (options.allowedOrigins) {
+      for (const o of options.allowedOrigins) origins.add(o);
     }
     cachedOrigins = origins;
     cacheExpiry = now + 60_000;
@@ -126,682 +85,282 @@ export function makeApp(container: Container, options: AppOptions = {}) {
 
   app.use((req, res, next) => {
     const origin = req.headers.origin;
-    if (!origin) return next();
-    const allowed = getAllowedOrigins();
-    if (allowed.has("*") || allowed.has(origin)) {
+    if (origin && getAllowedOrigins().has(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
-      if (req.method === "OPTIONS") return res.status(204).end();
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     }
+    if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
 
+  // Static file serving for uploaded blobs
+  const storageRoot = options.storageRoot ?? "data/storage";
+  app.use("/files", express.static(storageRoot, { maxAge: "1y", immutable: true }));
+
+  // Middleware
   const requireSession = makeRequireSession(container);
-  const requireAdmin = [requireSession, makeRequireRole(container, Role.Admin)];
-  const requireClient = [requireSession, makeRequireRole(container, Role.Client)];
-  const requireDeveloper = [requireSession, makeRequireRole(container, Role.Developer)];
+  const csrf = makeCsrf(container.csrfSecret);
 
-  app.use(
-    "/api",
-    makeCsrf(container.csrfSecret, ["/api/auth/login", "/api/inspector/validate"])
-  );
-
-  function setSessionCookie(res: Response, sid: string) {
-    res.cookie(SESSION_COOKIE, sid, {
-      httpOnly: true,
-      sameSite: "none",
-      secure: true,
-      path: "/",
-    });
-    res.cookie(CSRF_COOKIE, csrfTokenFor(sid, container.csrfSecret), {
-      httpOnly: false,
-      sameSite: "none",
-      secure: true,
-      path: "/",
-    });
+  /** Convenience: require session + specific role. */
+  function requireRole(role: Role) {
+    return [requireSession, makeRequireRole(container, role)];
   }
 
-  // === Auth + session ======================================================
-  app.post(
-    "/api/auth/login",
-    asyncHandler((req: Request, res: Response) => {
-      // Rate limit login attempts
-      const key = req.ip ?? "unknown";
-      if (!loginLimiter.allow(key)) {
-        return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many login attempts. Try again in a minute." } });
-      }
-      const { identifier, password } = req.body ?? {};
-      const { session, user } = container.auth.login(
-        String(identifier),
-        String(password)
-      );
-      setSessionCookie(res, session.id);
-      res.json({
-        user: { id: user.id, email: user.email, role: user.role },
-        csrfToken: csrfTokenFor(session.id, container.csrfSecret),
-      });
-    })
-  );
+  // ========================== AUTH ==========================
 
-  app.post(
-    "/api/auth/logout",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      container.auth.logout(req.session!.id);
-      res.clearCookie(SESSION_COOKIE, { path: "/" });
-      res.clearCookie(CSRF_COOKIE, { path: "/" });
-      res.json({ ok: true });
-    })
-  );
+  app.post("/api/auth/login", asyncHandler(async (req: Request, res: Response) => {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "Email and password required." } });
+    }
+    if (!loginLimiter.allow(req.ip ?? "unknown")) {
+      return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many login attempts." } });
+    }
+    const { session, user } = container.auth.login(email, password);
+    const csrfToken = csrfTokenFor(session.id, container.csrfSecret);
+    res.cookie(SESSION_COOKIE, session.id, { httpOnly: true, sameSite: "none", secure: true, maxAge: 30 * 60 * 1000 });
+    res.cookie(CSRF_COOKIE, csrfToken, { httpOnly: false, sameSite: "none", secure: true, maxAge: 30 * 60 * 1000 });
+    res.json({ user: { id: user.id, email: user.email, role: user.role }, csrfToken });
+  }));
 
-  app.get(
-    "/api/session",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const user = container.repos.users.getById(req.session!.userId)!;
-      res.json({
-        user: { id: user.id, email: user.email, role: user.role },
-        view: container.authz.dashboardView(user.role),
-        csrfToken: csrfTokenFor(req.session!.id, container.csrfSecret),
-      });
-    })
-  );
+  app.post("/api/auth/logout", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    container.auth.logout(req.session!.id);
+    res.clearCookie(SESSION_COOKIE);
+    res.clearCookie(CSRF_COOKIE);
+    res.json({ ok: true });
+  }));
 
-  // === File serving (screenshots + attachments) ============================
-  // No auth required: keys are SHA-256 hashes (unguessable without the content)
-  app.get(
-    "/api/files/:key",
-    asyncHandler(async (req: Request, res: Response) => {
-      const key = req.params.key;
-      // Validate key is hex only to prevent path traversal
-      if (!/^[0-9a-f]{64}$/.test(key)) {
-        return res.status(400).json(makeApiError("AUTH_REQUIRED", "Invalid file key."));
-      }
+  app.get("/api/auth/me", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const user = container.repos.users.getById(req.session!.userId)!;
+    res.json({ user: { id: user.id, email: user.email, role: user.role } });
+  }));
 
-      // R2 async path
-      if (container.r2Ops) {
-        try {
-          const { bytes, contentType } = await container.r2Ops.read(key);
-          res.setHeader("Content-Type", contentType);
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          return res.send(Buffer.from(bytes));
-        } catch {
-          return res.status(404).json(makeApiError("AUTH_REQUIRED", "File not found."));
-        }
-      }
+  // ========================== CHANGE REQUESTS ==========================
 
-      // Local filesystem path
-      if (!container.fileStore.exists(key)) {
-        return res.status(404).json(makeApiError("AUTH_REQUIRED", "File not found."));
-      }
-      const bytes = container.fileStore.read(key);
-      let contentType = "application/octet-stream";
-      if (bytes[0] === 0x89 && bytes[1] === 0x50) contentType = "image/png";
-      else if (bytes[0] === 0xFF && bytes[1] === 0xD8) contentType = "image/jpeg";
-      else if (bytes[0] === 0x25 && bytes[1] === 0x50) contentType = "application/pdf";
-      else if (bytes[0] === 0x47 && bytes[1] === 0x49) contentType = "image/gif";
+  app.post("/api/change-requests", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.session!.userId;
+    const role = req.session!.role;
+    if (role !== Role.Client && role !== Role.Admin) {
+      return res.status(403).json({ error: { code: "AUTHZ_FORBIDDEN", message: "Only clients can create requests." } });
+    }
+    const { websiteId, changeType, description, priority, contentAdd, contentCurrent, contentUpdated, contentDelete, selector, htmlMeta, dueDate } = req.body;
+    if (!websiteId || !changeType || !description) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "websiteId, changeType, and description are required." } });
+    }
+    const cr = container.changeRequests.create(userId, {
+      websiteId, changeType, description, priority, contentAdd, contentCurrent, contentUpdated, contentDelete, selector, htmlMeta, dueDate,
+    });
+    res.status(201).json({ changeRequest: cr });
+  }));
 
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      res.send(Buffer.from(bytes));
-    })
-  );
+  app.get("/api/change-requests", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const { userId, role } = req.session!;
+    let requests;
+    if (role === Role.Admin) requests = container.listing.listAll();
+    else if (role === Role.Developer) requests = container.listing.listForDeveloper(userId);
+    else requests = container.listing.listForClient(userId);
+    res.json({ changeRequests: requests });
+  }));
 
-  // === Websites (client) ===================================================
-  app.get(
-    "/api/websites",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      res.json({ websites: container.websites.listOwned(req.session!.userId) });
-    })
-  );
+  app.get("/api/change-requests/:id", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const detail = container.listing.getDetail(req.params.id);
+    res.json(detail);
+  }));
 
-  // === Inspector token =====================================================
-  app.post(
-    "/api/inspector/token",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      const { websiteId } = req.body ?? {};
-      const result = container.inspectorTokens.mint(
-        { sessionId: req.session!.id, userId: req.session!.userId },
-        String(websiteId)
-      );
-      res.json(result);
-    })
-  );
+  app.patch("/api/change-requests/:id/status", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { userId, role } = req.session!;
+    const { status } = req.body;
+    if (!status || !Object.values(ChangeRequestStatus).includes(status)) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "Valid status required." } });
+    }
+    if (role === Role.Client && status !== ChangeRequestStatus.Cancelled) {
+      return res.status(403).json({ error: { code: "AUTHZ_FORBIDDEN", message: "Clients can only cancel requests." } });
+    }
+    const cr = container.changeRequests.updateStatus(userId, req.params.id, status);
+    res.json({ changeRequest: cr });
+  }));
 
-  app.post(
-    "/api/inspector/validate",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { token, websiteId } = req.body ?? {};
-      const result = container.inspectorTokens.validate(token, String(websiteId));
-      res.json(result);
-    })
-  );
+  app.patch("/api/change-requests/:id/priority", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { priority } = req.body;
+    if (!priority || !Object.values(Priority).includes(priority)) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "Valid priority required." } });
+    }
+    container.changeRequests.updatePriority(req.params.id, priority);
+    res.json({ ok: true });
+  }));
 
-  // === Change requests (client compose + submit) ===========================
-  app.post(
-    "/api/change-requests",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      const { websiteId, priority } = req.body ?? {};
-      const cr = container.changeRequests.createDraft(
-        req.session!.userId,
-        String(websiteId)
-      );
-      // Update priority if provided
-      if (priority && Object.values(Priority).includes(priority)) {
-        container.repos.changeRequests.updatePriority(cr.id, priority);
-      }
-      res.status(201).json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
-    })
-  );
+  app.post("/api/change-requests/:id/screenshots", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { data, mime, width, height } = req.body;
+    const bytes = decodeBase64Payload(data);
+    const screenshot = container.changeRequests.addScreenshot(
+      req.params.id, bytes, mime || "image/png", width || 0, height || 0
+    );
+    res.status(201).json({ screenshot });
+  }));
 
-  app.post(
-    "/api/change-requests/:id/items",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      const item = container.changeRequests.addItem(
-        req.session!.userId,
-        req.params.id,
-        req.body
-      );
-      res.status(201).json({ item });
-    })
-  );
+  app.post("/api/change-requests/:id/attachments", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { data, mime, filename } = req.body;
+    const bytes = decodeBase64Payload(data);
+    const attachment = container.changeRequests.addAttachment(
+      req.params.id, bytes, mime || "application/octet-stream", filename || "file"
+    );
+    res.status(201).json({ attachment });
+  }));
 
-  app.post(
-    "/api/change-requests/:id/screenshots",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      const { dataBase64, mime } = req.body ?? {};
-      const bytes = decodeBase64Payload(dataBase64);
-      const storageKey = container.changeRequests.storeScreenshot(
-        req.session!.userId,
-        req.params.id,
-        bytes,
-        String(mime ?? "image/png")
-      );
-      res.status(201).json({ storageKey });
-    })
-  );
+  app.post("/api/change-requests/:id/notes", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.session!.userId;
+    const { content, imageData, imageMime } = req.body;
+    const imageBytes = imageData ? decodeBase64Payload(imageData) : null;
+    const note = container.changeRequests.addNote(req.params.id, userId, content, imageBytes, imageMime);
+    res.status(201).json({ note });
+  }));
 
-  app.post(
-    "/api/change-requests/:id/items/:itemId/attachments",
-    requireClient,
-    makeValidateUpload(),
-    asyncHandler((req: Request, res: Response) => {
-      const { dataBase64, mime, filename } = req.body ?? {};
-      const bytes = decodeBase64Payload(dataBase64);
-      const attachment = container.changeRequests.addAttachment(
-        req.session!.userId,
-        req.params.id,
-        req.params.itemId,
-        bytes,
-        String(mime ?? "application/octet-stream"),
-        String(filename ?? "attachment")
-      );
-      res.status(201).json({ attachment });
-    })
-  );
+  app.get("/api/change-requests/:id/notes", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const notes = container.repos.notes.listByRequest(req.params.id);
+    res.json({ notes });
+  }));
 
-  app.post(
-    "/api/change-requests/:id/submit",
-    requireClient,
-    asyncHandler((req: Request, res: Response) => {
-      const cr = container.changeRequests.submit(req.session!.userId, req.params.id);
-      res.json({ changeRequest: cr });
-    })
-  );
+  app.get("/api/change-requests/:id/activity", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const activity = container.repos.activities.listByRequest(req.params.id);
+    res.json({ activity });
+  }));
 
-  // === Change request status transitions (developer/admin) =================
-  app.patch(
-    "/api/change-requests/:id/status",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { status } = req.body ?? {};
-      const s = req.session!;
-      const cr = container.repos.changeRequests.getById(req.params.id);
-      if (!cr) {
-        return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
-      }
+  // ========================== PROJECTS ==========================
 
-      // Validate the transition is allowed
-      const validTransitions: Record<string, string[]> = {
-        Submitted: ["InProgress", "Rejected"],
-        AwaitingDeveloperAssignment: ["InProgress", "Rejected"],
-        InProgress: ["Done", "Rejected"],
-        Done: [], // terminal
-        Rejected: ["InProgress"], // can reopen
-      };
+  app.get("/api/projects/:projectId/change-requests", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const requests = container.listing.listByProject(req.params.projectId);
+    const enriched = requests.map((cr) => ({
+      ...cr,
+      screenshots: container.repos.screenshots.listByRequest(cr.id),
+    }));
+    res.json({ changeRequests: enriched });
+  }));
 
-      const allowed = validTransitions[cr.status] ?? [];
-      if (!allowed.includes(status)) {
-        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", `Cannot transition from ${cr.status} to ${status}.`));
-      }
+  app.get("/api/projects", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const { userId, role } = req.session!;
+    let projects;
+    if (role === Role.Admin) {
+      projects = container.repos.projects.listAll();
+    } else if (role === Role.Developer) {
+      const assignments = container.repos.assignments.listByDeveloper(userId);
+      projects = assignments.map((a) => container.repos.projects.getById(a.projectId)).filter(Boolean);
+    } else {
+      const websites = container.repos.websites.listByOwner(userId);
+      const projectIds = [...new Set(websites.map((w) => w.projectId))];
+      projects = projectIds.map((id) => container.repos.projects.getById(id)).filter(Boolean);
+    }
+    res.json({ projects });
+  }));
 
-      // Only developers assigned to the project or admins can transition
-      if (s.role === Role.Developer) {
-        if (!container.ownership.canDeveloperView(s.userId, cr.id)) {
-          return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Not assigned to this request."));
-        }
-      } else if (s.role !== Role.Admin) {
-        return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Only developers or admins can update status."));
-      }
+  // ========================== WEBSITES ==========================
 
-      container.repos.changeRequests.updateStatus(cr.id, status as ChangeRequestStatus);
-      // Log activity
-      container.repos.activities.create({
-        id: uuid(),
-        changeRequestId: cr.id,
-        actorId: s.userId,
-        action: "status_change",
-        detail: `${cr.status} → ${status}`,
-        createdAt: new Date(container.clock.now()).toISOString(),
-      });
-      res.json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
-    })
-  );
+  app.get("/api/websites", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const { userId, role } = req.session!;
+    const websites = role === Role.Admin
+      ? container.repos.websites.listAll()
+      : container.repos.websites.listByOwner(userId);
+    res.json({ websites });
+  }));
 
-  // === Change request priority update ======================================
-  app.patch(
-    "/api/change-requests/:id/priority",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { priority } = req.body ?? {};
-      if (!Object.values(Priority).includes(priority)) {
-        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", "Invalid priority."));
-      }
-      const cr = container.repos.changeRequests.getById(req.params.id);
-      if (!cr) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
-      container.repos.changeRequests.updatePriority(cr.id, priority);
-      res.json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
-    })
-  );
+  // ========================== ANALYTICS ==========================
 
-  // === Notes (comments) on change requests =================================
-  app.get(
-    "/api/change-requests/:id/notes",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const notes = container.repos.notes.listByRequest(req.params.id);
-      // Enrich with author email
-      const enriched = notes.map((n) => {
-        const author = container.repos.users.getById(n.authorId);
-        return { ...n, authorEmail: author?.email ?? "unknown" };
-      });
-      res.json({ notes: enriched });
-    })
-  );
+  app.get("/api/analytics/stats", requireSession, asyncHandler(async (req: Request, res: Response) => {
+    const projectId = req.query.projectId as string | undefined;
+    const statusCounts = container.repos.changeRequests.getStatusCounts(projectId);
+    const monthlyStats = container.repos.changeRequests.getMonthlyStats(12);
+    const avgResolution = container.repos.changeRequests.getAvgResolutionHours(projectId);
+    res.json({ statusCounts, monthlyStats, avgResolutionHours: avgResolution });
+  }));
 
-  app.post(
-    "/api/change-requests/:id/notes",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { content } = req.body ?? {};
-      if (!content || typeof content !== "string" || content.trim().length === 0) {
-        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "Note content is required."));
-      }
-      const note = container.repos.notes.create({
-        id: uuid(),
-        changeRequestId: req.params.id,
-        authorId: req.session!.userId,
-        content: content.trim(),
-        createdAt: new Date(container.clock.now()).toISOString(),
-      });
-      const author = container.repos.users.getById(note.authorId);
-      res.status(201).json({ note: { ...note, authorEmail: author?.email ?? "unknown" } });
-    })
-  );
+  // ========================== INSPECTOR ==========================
 
-  // === Activity feed ========================================================
-  app.get(
-    "/api/change-requests/:id/activity",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const activities = container.repos.activities.listByRequest(req.params.id);
-      const enriched = activities.map((a) => {
-        const actor = container.repos.users.getById(a.actorId);
-        return { ...a, actorEmail: actor?.email ?? "unknown" };
-      });
-      res.json({ activities: enriched });
-    })
-  );
+  app.post("/api/inspector/token", requireSession, csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { websiteId } = req.body;
+    if (!websiteId) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "websiteId required." } });
+    }
+    const result = container.inspectorTokens.mint(
+      { sessionId: req.session!.id, userId: req.session!.userId },
+      String(websiteId)
+    );
+    res.json(result);
+  }));
 
-  // === Bulk status update ==================================================
-  app.post(
-    "/api/change-requests/bulk-status",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { ids, status } = req.body ?? {};
-      const s = req.session!;
-      if (!Array.isArray(ids) || !status) {
-        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", "ids (array) and status are required."));
-      }
-      if (s.role !== Role.Admin && s.role !== Role.Developer) {
-        return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Only developers or admins can bulk update."));
-      }
-      let updated = 0;
-      for (const id of ids) {
-        const cr = container.repos.changeRequests.getById(id);
-        if (!cr) continue;
-        container.repos.changeRequests.updateStatus(cr.id, status as ChangeRequestStatus);
-        container.repos.activities.create({
-          id: uuid(),
-          changeRequestId: cr.id,
-          actorId: s.userId,
-          action: "status_change",
-          detail: `${cr.status} → ${status} (bulk)`,
-          createdAt: new Date(container.clock.now()).toISOString(),
-        });
-        updated++;
-      }
-      res.json({ updated });
-    })
-  );
+  app.post("/api/inspector/validate", asyncHandler(async (req: Request, res: Response) => {
+    const { token, websiteId } = req.body;
+    if (!token || !websiteId) return res.status(400).json({ valid: false });
+    try {
+      const payload = container.inspectorTokens.validate(token, websiteId);
+      res.json({ valid: true, payload });
+    } catch {
+      res.json({ valid: false });
+    }
+  }));
 
-  // === Password change (self-service) ======================================
-  app.post(
-    "/api/auth/change-password",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const { currentPassword, newPassword } = req.body ?? {};
-      if (!currentPassword || !newPassword || typeof newPassword !== "string" || newPassword.length < 8) {
-        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "New password must be at least 8 characters."));
-      }
-      const user = container.repos.users.getById(req.session!.userId);
-      if (!user) return res.status(401).json(makeApiError("AUTH_REQUIRED", "User not found."));
+  // ========================== ADMIN ==========================
 
-      // Verify current password using the auth service
-      try {
-        container.auth.login(user.email, String(currentPassword));
-      } catch {
-        return res.status(401).json(makeApiError("AUTH_INVALID_CREDENTIALS", "Current password is incorrect."));
-      }
+  app.get("/api/admin/users", ...requireRole(Role.Admin), asyncHandler(async (_req: Request, res: Response) => {
+    const clients = container.repos.users.listByRole(Role.Client);
+    const devs = container.repos.users.listByRole(Role.Developer);
+    const admins = container.repos.users.listByRole(Role.Admin);
+    const users = [...clients, ...devs, ...admins];
+    res.json({ users: users.map((u) => ({ id: u.id, email: u.email, role: u.role, createdAt: u.createdAt })) });
+  }));
 
-      const newHash = container.auth.hashPassword(String(newPassword));
-      container.repos.users.updatePassword(user.id, newHash);
-      res.json({ ok: true });
-    })
-  );
+  app.post("/api/admin/users", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { email, password, role } = req.body;
+    if (!email || !password || !role) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "email, password, role required." } });
+    }
+    const passwordHash = container.auth.hashPassword(password);
+    const user = container.repos.users.create({ id: uuid(), email, passwordHash, role, createdAt: new Date().toISOString() });
+    res.status(201).json({ user: { id: user.id, email: user.email, role: user.role } });
+  }));
 
-  // === Analytics / reporting ================================================
-  app.get(
-    "/api/analytics/monthly",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const months = Number(req.query.months) || 12;
-      res.json({ stats: container.repos.changeRequests.getMonthlyStats(months) });
-    })
-  );
+  app.post("/api/admin/projects", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "name required." } });
+    const project = container.repos.projects.create({ id: uuid(), name });
+    res.status(201).json({ project });
+  }));
 
-  app.get(
-    "/api/analytics/summary",
-    requireSession,
-    asyncHandler((_req: Request, res: Response) => {
-      const counts = container.repos.changeRequests.getStatusCounts();
-      res.json({ counts });
-    })
-  );
+  app.post("/api/admin/websites", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { projectId, ownerClientId, name, url } = req.body;
+    if (!projectId || !ownerClientId || !name || !url) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "All fields required." } });
+    }
+    const website = container.repos.websites.create({ id: uuid(), projectId, ownerClientId, name, url });
+    cachedOrigins = null;
+    res.status(201).json({ website });
+  }));
 
-  // === Export change request as printable HTML (PDF via browser print) ======
-  app.get(
-    "/api/change-requests/:id/export",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const s = req.session!;
-      const cr = container.repos.changeRequests.getById(req.params.id);
-      if (!cr) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
+  app.post("/api/admin/assignments", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { projectId, developerId } = req.body;
+    if (!projectId || !developerId) {
+      return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "projectId and developerId required." } });
+    }
+    const assignment = container.assignments.set(projectId, developerId);
+    res.status(201).json({ assignment });
+  }));
 
-      const items = container.repos.changeItems.listByRequest(cr.id).map((item) => ({
-        item,
-        screenshot: container.repos.screenshots.getByItem(item.id),
-        componentReference: container.repos.componentReferences.getByItem(item.id),
-      }));
-      const website = container.repos.websites.getById(cr.websiteId);
+  app.delete("/api/admin/websites/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    container.repos.websites.remove(req.params.id);
+    cachedOrigins = null;
+    res.json({ ok: true });
+  }));
 
-      const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Change Request #${cr.id.slice(0, 8)}</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #111; }
-  h1 { font-size: 24px; border-bottom: 2px solid #6366f1; padding-bottom: 8px; }
-  .meta { color: #666; font-size: 14px; margin-bottom: 24px; }
-  .item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; page-break-inside: avoid; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-  .badge-add { background: #d1fae5; color: #065f46; }
-  .badge-update { background: #dbeafe; color: #1e40af; }
-  .badge-delete { background: #fee2e2; color: #991b1b; }
-  .content-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin: 8px 0; font-size: 14px; }
-  img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 6px; }
-  @media print { body { margin: 0; } .item { break-inside: avoid; } }
-</style></head><body>
-<h1>Change Request #${cr.id.slice(0, 8)}</h1>
-<div class="meta">
-  <p><strong>Website:</strong> ${website?.name ?? "Unknown"} (${website?.url ?? ""})</p>
-  <p><strong>Status:</strong> ${cr.status} | <strong>Priority:</strong> ${cr.priority}</p>
-  <p><strong>Submitted:</strong> ${cr.submittedAt ? new Date(cr.submittedAt).toLocaleString() : "Draft"}</p>
-  ${cr.dueDate ? `<p><strong>Due:</strong> ${cr.dueDate}</p>` : ""}
-</div>
-<h2>${items.length} Change Item${items.length !== 1 ? "s" : ""}</h2>
-${items.map(({ item, screenshot, componentReference }, i) => `
-<div class="item">
-  <p><strong>#${i + 1}</strong> <span class="badge badge-${item.changeType.toLowerCase()}">${item.changeType}</span>
-    ${componentReference?.selector ? `<code>${escapeHtml(componentReference.selector)}</code>` : ""}</p>
-  <p>${escapeHtml(item.description)}</p>
-  ${item.contentAdd ? `<div class="content-box"><strong>Add:</strong> ${escapeHtml(item.contentAdd)}</div>` : ""}
-  ${item.contentCurrent ? `<div class="content-box"><strong>Current:</strong> ${escapeHtml(item.contentCurrent)}</div>` : ""}
-  ${item.contentUpdated ? `<div class="content-box"><strong>Updated:</strong> ${escapeHtml(item.contentUpdated)}</div>` : ""}
-  ${item.contentDelete ? `<div class="content-box"><strong>Remove:</strong> ${escapeHtml(item.contentDelete)}</div>` : ""}
-  ${screenshot ? `<img src="/api/files/${screenshot.storageKey}" alt="Screenshot" />` : ""}
-</div>`).join("\n")}
-<p style="color:#999;font-size:12px;margin-top:32px;">Generated by BugPixel on ${new Date().toISOString()}</p>
-</body></html>`;
+  // ========================== CATCH-ALL ==========================
 
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(html);
-    })
-  );
-
-  // === Role-scoped listing + detail ========================================
-  app.get(
-    "/api/change-requests",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const s = req.session!;
-      let changeRequests;
-      if (s.role === Role.Client)
-        changeRequests = container.listing.listForClient(s.userId);
-      else if (s.role === Role.Developer)
-        changeRequests = container.listing.listForDeveloper(s.userId);
-      else changeRequests = container.listing.listAllForAdmin();
-      res.json({ changeRequests });
-    })
-  );
-
-  app.get(
-    "/api/change-requests/:id",
-    requireSession,
-    asyncHandler((req: Request, res: Response) => {
-      const s = req.session!;
-      if (s.role === Role.Client) {
-        res.json(container.listing.clientDetail(s.userId, req.params.id));
-      } else if (s.role === Role.Developer) {
-        res.json(container.listing.developerDetail(s.userId, req.params.id));
-      } else {
-        res.json(container.listing.adminDetail(req.params.id));
-      }
-    })
-  );
-
-  // === Admin: roster =======================================================
-  app.get(
-    "/api/admin/developers",
-    requireAdmin,
-    asyncHandler((_req: Request, res: Response) => {
-      const developers = container.roster
-        .list()
-        .map((u) => ({ id: u.id, email: u.email, role: u.role }));
-      res.json({ developers });
-    })
-  );
-
-  app.post(
-    "/api/admin/developers",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const { identifier, password } = req.body ?? {};
-      const passwordHash = container.auth.hashPassword(String(password ?? ""));
-      const dev = container.roster.add({ identifier: String(identifier), passwordHash });
-      res.status(201).json({ developer: { id: dev.id, email: dev.email, role: dev.role } });
-    })
-  );
-
-  app.delete(
-    "/api/admin/developers/:id",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      container.roster.remove(req.params.id);
-      res.json({ ok: true });
-    })
-  );
-
-  // === Admin: assignments ==================================================
-  app.get(
-    "/api/admin/assignments",
-    requireAdmin,
-    asyncHandler((_req: Request, res: Response) => {
-      res.json({ assignments: container.assignments.list() });
-    })
-  );
-
-  app.put(
-    "/api/admin/projects/:projectId/assignment",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const { developerId } = req.body ?? {};
-      const assignment = container.assignments.set(
-        req.params.projectId,
-        String(developerId)
-      );
-      res.json({ assignment });
-    })
-  );
-
-  app.delete(
-    "/api/admin/projects/:projectId/assignment",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      container.assignments.remove(req.params.projectId);
-      res.json({ ok: true });
-    })
-  );
-
-  // === Admin: projects + websites ==========================================
-  app.get(
-    "/api/admin/projects",
-    requireAdmin,
-    asyncHandler((_req: Request, res: Response) => {
-      res.json({ projects: container.repos.projects.list() });
-    })
-  );
-
-  app.post(
-    "/api/admin/projects",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const { name } = req.body ?? {};
-      if (!name || typeof name !== "string" || name.trim().length === 0) {
-        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "Project name is required."));
-      }
-      const project = container.repos.projects.create({ id: uuid(), name: name.trim() });
-      res.status(201).json({ project });
-    })
-  );
-
-  app.get(
-    "/api/admin/websites",
-    requireAdmin,
-    asyncHandler((_req: Request, res: Response) => {
-      const websites = container.repos.websites.listAll();
-      const enriched = websites.map((w) => {
-        const owner = container.repos.users.getById(w.ownerClientId);
-        const project = container.repos.projects.getById(w.projectId);
-        return { ...w, ownerEmail: owner?.email ?? "unknown", projectName: project?.name ?? "unknown" };
-      });
-      res.json({ websites: enriched });
-    })
-  );
-
-  app.post(
-    "/api/admin/websites",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const { name, url, projectId, ownerClientId } = req.body ?? {};
-      if (!name || !url || !projectId || !ownerClientId) {
-        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "name, url, projectId, and ownerClientId are required."));
-      }
-      const website = container.repos.websites.create({
-        id: uuid(),
-        projectId: String(projectId),
-        ownerClientId: String(ownerClientId),
-        name: String(name),
-        url: String(url),
-      });
-      res.status(201).json({ website });
-    })
-  );
-
-  app.patch(
-    "/api/admin/websites/:id",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const { name, url } = req.body ?? {};
-      const existing = container.repos.websites.getById(req.params.id);
-      if (!existing) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Website not found."));
-      container.repos.websites.update(req.params.id, {
-        name: name ? String(name) : undefined,
-        url: url ? String(url) : undefined,
-      });
-      res.json({ website: container.repos.websites.getById(req.params.id) });
-    })
-  );
-
-  app.delete(
-    "/api/admin/websites/:id",
-    requireAdmin,
-    asyncHandler((req: Request, res: Response) => {
-      const existing = container.repos.websites.getById(req.params.id);
-      if (!existing) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Website not found."));
-      container.repos.websites.remove(req.params.id);
-      res.json({ ok: true });
-    })
-  );
-
-  // Get all clients (for website owner assignment)
-  app.get(
-    "/api/admin/clients",
-    requireAdmin,
-    asyncHandler((_req: Request, res: Response) => {
-      const clients = container.repos.users.listByRole(Role.Client);
-      res.json({ clients: clients.map((u) => ({ id: u.id, email: u.email })) });
-    })
-  );
-
-  // Fallback 404 for unknown API routes.
   app.use("/api", (_req: Request, res: Response) => {
-    res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
+    res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found." } });
   });
 
-  // Serve the injected inspector script from the portal origin.
   if (options.inspectorDir) {
     app.use("/inspector", express.static(options.inspectorDir));
   }
 
-  // Serve the built SPA and support client-side routing.
   if (options.spaDir) {
     const spaDir = options.spaDir;
     app.use(express.static(spaDir));
