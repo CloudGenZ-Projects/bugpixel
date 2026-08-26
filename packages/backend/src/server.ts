@@ -42,6 +42,10 @@ function main() {
     enforceHttps: isProd,
     spaDir: process.env.CRP_SPA_DIR,
     inspectorDir: process.env.CRP_INSPECTOR_DIR,
+    allowedOrigins: (process.env.CRP_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean),
   });
 
   app.listen(port, () => {

@@ -1,0 +1,104 @@
+/* Sample client website styling — deliberately simple. */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  color: #1c1c1e;
+  line-height: 1.5;
+}
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid #e5e5ea;
+  position: sticky;
+  top: 0;
+  background: #fff;
+}
+.brand {
+  font-weight: 700;
+  font-size: 1.4rem;
+}
+.brand span {
+  color: #007aff;
+}
+nav a {
+  margin-left: 1.5rem;
+  color: #3a3a3c;
+  text-decoration: none;
+}
+nav a:hover {
+  color: #007aff;
+}
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+.hero {
+  text-align: center;
+  padding: 5rem 1rem 4rem;
+}
+.hero h1 {
+  font-size: 2.75rem;
+  margin: 0 0 1rem;
+}
+.subtitle {
+  font-size: 1.2rem;
+  color: #6c6c70;
+  max-width: 620px;
+  margin: 0 auto 2rem;
+}
+.cta {
+  background: #007aff;
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.85rem 1.6rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.features,
+.pricing,
+.contact {
+  padding: 3rem 0;
+  border-top: 1px solid #f2f2f7;
+}
+h2 {
+  font-size: 1.8rem;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+.card {
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+.card h3 {
+  margin-top: 0;
+}
+.price {
+  font-size: 2.5rem;
+  font-weight: 700;
+}
+.price span {
+  font-size: 1rem;
+  color: #6c6c70;
+  font-weight: 400;
+}
+.site-footer {
+  text-align: center;
+  padding: 2rem;
+  color: #8e8e93;
+  border-top: 1px solid #f2f2f7;
+  margin-top: 2rem;
+}

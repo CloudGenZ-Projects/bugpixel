@@ -39,6 +39,13 @@ export interface AppOptions {
   spaDir?: string;
   /** Absolute path to the built inspector script directory (optional). */
   inspectorDir?: string;
+  /**
+   * Origins allowed to make credentialed cross-origin requests (e.g. a sample
+   * client website hosted on a different origin using the inspector). Each
+   * listed origin is reflected in Access-Control-Allow-Origin with credentials
+   * enabled. Same-origin requests never need this.
+   */
+  allowedOrigins?: string[];
 }
 
 /**
@@ -84,6 +91,27 @@ export function makeApp(container: Container, options: AppOptions = {}) {
 
   app.use(express.json({ limit: "15mb" }));
   app.use(cookieParser());
+
+  // --- CORS for credentialed cross-origin callers (e.g. the inspector on a
+  // client website hosted on a different origin). Only listed origins are
+  // allowed, and only with credentials so cookies/CSRF flow correctly.
+  const allowedOrigins = new Set(options.allowedOrigins ?? []);
+  if (allowedOrigins.size > 0) {
+    app.use((req, res, next) => {
+      const origin = req.headers.origin;
+      if (origin && allowedOrigins.has(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
+        if (req.method === "OPTIONS") {
+          return res.status(204).end();
+        }
+      }
+      next();
+    });
+  }
 
   const requireSession = makeRequireSession(container);
   const requireAdmin = [requireSession, makeRequireRole(container, Role.Admin)];

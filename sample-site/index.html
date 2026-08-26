@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Acme Co — Sample Client Website</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">Acme<span>Co</span></div>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main>
+      <section id="hero" class="hero">
+        <h1>Build something people love</h1>
+        <p class="subtitle">
+          A sample website used to test the BugPixel change-request inspector.
+          Log in to the portal, open this site, and pick any component below.
+        </p>
+        <button class="cta">Get started</button>
+      </section>
+
+      <section id="features" class="features">
+        <h2>Features</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Fast</h3>
+            <p>Ship changes in minutes, not days.</p>
+          </article>
+          <article class="card">
+            <h3>Simple</h3>
+            <p>Point, click, describe the change you want.</p>
+          </article>
+          <article class="card">
+            <h3>Traceable</h3>
+            <p>Every request is screenshotted and routed to a developer.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="pricing" class="pricing">
+        <h2>Pricing</h2>
+        <p class="price">$0<span>/mo for this demo</span></p>
+      </section>
+
+      <section id="contact" class="contact">
+        <h2>Contact</h2>
+        <p>Email us at <a href="mailto:hello@example.com">hello@example.com</a>.</p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>&copy; 2026 Acme Co. Sample site for BugPixel testing.</p>
+    </footer>
+
+    <!--
+      The injected inspector. It stays completely inert for anonymous visitors
+      and only activates after an origin-verified handshake from the portal
+      popup carrying a valid, backend-validated token tied to the owning
+      Client's session.
+
+      config.js sets window.__BUGPIXEL__ = { portalOrigin, websiteId }.
+      The loader below reads those and injects the real script from the portal
+      origin with the required data-* attributes. Edit config.js on deploy —
+      no need to touch this HTML.
+    -->
+    <script src="./config.js"></script>
+    <script src="./inspector-loader.js"></script>
+  </body>
+</html>
