@@ -88,11 +88,7 @@ export function makeChangeRequestService(
 
   function requireFileStore(): FileStore {
     if (!fileStore) {
-      throw new ServiceError(
-        "SUBMISSION_FAILED",
-        500,
-        "File storage is not configured."
-      );
+      throw new ServiceError("SUBMISSION_FAILED", 500, "File storage is not configured.");
     }
     return fileStore;
   }

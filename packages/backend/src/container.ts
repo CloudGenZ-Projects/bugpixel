@@ -58,6 +58,8 @@ export interface Container {
   assignments: AssignmentService;
   listing: ListingService;
   websites: WebsiteService;
+  /** Secret used to derive CSRF tokens (server-side only). */
+  csrfSecret: string;
 }
 
 export function makeContainer(config: ContainerConfig): Container {
@@ -107,5 +109,6 @@ export function makeContainer(config: ContainerConfig): Container {
     assignments,
     listing,
     websites,
+    csrfSecret: config.inspectorTokenSecret,
   };
 }

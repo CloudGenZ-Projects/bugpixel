@@ -30,11 +30,7 @@ export function makeAuthService(
 ): AuthService {
   function authError(): never {
     // Generic message; do not reveal whether the identifier exists (Req 1.2).
-    throw new ServiceError(
-      "AUTH_INVALID_CREDENTIALS",
-      401,
-      "Invalid credentials."
-    );
+    throw new ServiceError("AUTH_INVALID_CREDENTIALS", 401, "Invalid credentials.");
   }
 
   return {
@@ -46,7 +42,10 @@ export function makeAuthService(
       const user = users.getByEmail(identifier);
       if (!user) {
         // Perform a dummy compare to reduce timing side-channels, then fail.
-        bcrypt.compareSync(password, "$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinv");
+        bcrypt.compareSync(
+          password,
+          "$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinv"
+        );
         authError();
       }
       const ok = bcrypt.compareSync(password, user.passwordHash);

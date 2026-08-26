@@ -170,9 +170,7 @@ export function makeAttachmentRepo(db: AppDatabase) {
 
     listByItem(changeItemId: string): Attachment[] {
       const rows = db
-        .prepare(
-          `SELECT * FROM attachment WHERE change_item_id = ? ORDER BY id ASC`
-        )
+        .prepare(`SELECT * FROM attachment WHERE change_item_id = ? ORDER BY id ASC`)
         .all(changeItemId) as Row[];
       return rows.map(mapAttachment);
     },

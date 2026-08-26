@@ -16,10 +16,14 @@ import type { Container } from "../container.js";
 import { ServiceError } from "../services/serviceError.js";
 import {
   SESSION_COOKIE,
+  CSRF_COOKIE,
   asyncHandler,
   errorHandler,
   makeRequireRole,
   makeRequireSession,
+  makeCsrf,
+  makeValidateUpload,
+  csrfTokenFor,
 } from "./middleware.js";
 
 export interface AppOptions {
@@ -67,10 +71,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
     if (options.enforceHttps) {
-      res.setHeader(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains"
-      );
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
       const proto = req.headers["x-forwarded-proto"];
       const isHttps = req.secure || proto === "https";
       if (!isHttps) {
@@ -87,11 +88,24 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   const requireSession = makeRequireSession(container);
   const requireAdmin = [requireSession, makeRequireRole(container, Role.Admin)];
   const requireClient = [requireSession, makeRequireRole(container, Role.Client)];
-  const requireDeveloper = [requireSession, makeRequireRole(container, Role.Developer)];
+
+  // CSRF protection on state-changing API requests. Login (no session yet) and
+  // the cross-origin inspector validate endpoint (token-gated) are exempt.
+  app.use(
+    "/api",
+    makeCsrf(container.csrfSecret, ["/api/auth/login", "/api/inspector/validate"])
+  );
 
   function setSessionCookie(res: Response, sid: string) {
     res.cookie(SESSION_COOKIE, sid, {
       httpOnly: true,
+      sameSite: "strict",
+      secure: options.secureCookies ?? false,
+      path: "/",
+    });
+    // Companion CSRF cookie: readable by JS (double-submit), same-site.
+    res.cookie(CSRF_COOKIE, csrfTokenFor(sid, container.csrfSecret), {
+      httpOnly: false,
       sameSite: "strict",
       secure: options.secureCookies ?? false,
       path: "/",
@@ -103,9 +117,15 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     "/api/auth/login",
     asyncHandler((req: Request, res: Response) => {
       const { identifier, password } = req.body ?? {};
-      const { session, user } = container.auth.login(String(identifier), String(password));
+      const { session, user } = container.auth.login(
+        String(identifier),
+        String(password)
+      );
       setSessionCookie(res, session.id);
-      res.json({ user: { id: user.id, email: user.email, role: user.role } });
+      res.json({
+        user: { id: user.id, email: user.email, role: user.role },
+        csrfToken: csrfTokenFor(session.id, container.csrfSecret),
+      });
     })
   );
 
@@ -115,6 +135,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     asyncHandler((req: Request, res: Response) => {
       container.auth.logout(req.session!.id);
       res.clearCookie(SESSION_COOKIE, { path: "/" });
+      res.clearCookie(CSRF_COOKIE, { path: "/" });
       res.json({ ok: true });
     })
   );
@@ -127,6 +148,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       res.json({
         user: { id: user.id, email: user.email, role: user.role },
         view: container.authz.dashboardView(user.role),
+        csrfToken: csrfTokenFor(req.session!.id, container.csrfSecret),
       });
     })
   );
@@ -170,7 +192,10 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     requireClient,
     asyncHandler((req: Request, res: Response) => {
       const { websiteId } = req.body ?? {};
-      const cr = container.changeRequests.createDraft(req.session!.userId, String(websiteId));
+      const cr = container.changeRequests.createDraft(
+        req.session!.userId,
+        String(websiteId)
+      );
       res.status(201).json({ changeRequest: cr });
     })
   );
@@ -211,6 +236,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   app.post(
     "/api/change-requests/:id/items/:itemId/attachments",
     requireClient,
+    makeValidateUpload(),
     asyncHandler((req: Request, res: Response) => {
       const { dataBase64, mime, filename } = req.body ?? {};
       const bytes = decodeBase64Payload(dataBase64);
@@ -243,7 +269,8 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     asyncHandler((req: Request, res: Response) => {
       const s = req.session!;
       let changeRequests;
-      if (s.role === Role.Client) changeRequests = container.listing.listForClient(s.userId);
+      if (s.role === Role.Client)
+        changeRequests = container.listing.listForClient(s.userId);
       else if (s.role === Role.Developer)
         changeRequests = container.listing.listForDeveloper(s.userId);
       else changeRequests = container.listing.listAllForAdmin();
@@ -286,7 +313,9 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       const { identifier, password } = req.body ?? {};
       const passwordHash = container.auth.hashPassword(String(password ?? ""));
       const dev = container.roster.add({ identifier: String(identifier), passwordHash });
-      res.status(201).json({ developer: { id: dev.id, email: dev.email, role: dev.role } });
+      res
+        .status(201)
+        .json({ developer: { id: dev.id, email: dev.email, role: dev.role } });
     })
   );
 
@@ -313,7 +342,10 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     requireAdmin,
     asyncHandler((req: Request, res: Response) => {
       const { developerId } = req.body ?? {};
-      const assignment = container.assignments.set(req.params.projectId, String(developerId));
+      const assignment = container.assignments.set(
+        req.params.projectId,
+        String(developerId)
+      );
       res.json({ assignment });
     })
   );

@@ -21,7 +21,8 @@ function main() {
   const dbPath = process.env.CRP_DB_PATH ?? "data/portal.db";
   const storageRoot = process.env.CRP_STORAGE_ROOT ?? "data/storage";
   const isProd = process.env.NODE_ENV === "production";
-  const secret = process.env.CRP_INSPECTOR_SECRET ?? (isProd ? "" : "dev-inspector-secret");
+  const secret =
+    process.env.CRP_INSPECTOR_SECRET ?? (isProd ? "" : "dev-inspector-secret");
 
   if (isProd && !secret) {
     throw new Error("CRP_INSPECTOR_SECRET must be set in production.");
@@ -44,7 +45,6 @@ function main() {
   });
 
   app.listen(port, () => {
-    // eslint-disable-next-line no-console
     console.log(`Change Request Portal API listening on :${port}`);
   });
 }

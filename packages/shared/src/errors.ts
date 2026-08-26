@@ -36,10 +36,6 @@ export interface ApiError {
 }
 
 /** Convenience helper to build a well-formed API error envelope. */
-export function makeApiError(
-  code: ErrorCode,
-  message: string,
-  field?: string
-): ApiError {
+export function makeApiError(code: ErrorCode, message: string, field?: string): ApiError {
   return { error: field ? { code, message, field } : { code, message } };
 }

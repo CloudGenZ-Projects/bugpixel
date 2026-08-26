@@ -63,7 +63,15 @@ async function loginClient(): Promise<{ cookie: string; websiteId: string }> {
   const res = await request(app)
     .post("/api/auth/login")
     .send({ identifier: "c@example.com", password: "pw" });
-  return { cookie: res.headers["set-cookie"][0], websiteId };
+  const cookies = res.headers["set-cookie"] as unknown as string[];
+  const cookie = cookies.map((c) => c.split(";")[0]).join("; ");
+  return { cookie, websiteId };
+}
+
+/** The CSRF token from a Cookie header string. */
+function csrfOf(cookie: string): string {
+  const m = cookie.match(/(?:^|; )csrf=([^;]*)/);
+  return m ? m[1] : "";
 }
 
 // A 1x1 PNG (base64) used as a screenshot/attachment payload.
@@ -76,14 +84,14 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
 
     const draft = await request(app)
       .post("/api/change-requests")
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ websiteId });
     const crId = draft.body.changeRequest.id;
 
     // Upload the screenshot -> real storage key.
     const shot = await request(app)
       .post(`/api/change-requests/${crId}/screenshots`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ dataBase64: PNG_1x1, mime: "image/png" });
     expect(shot.status).toBe(201);
     expect(typeof shot.body.storageKey).toBe("string");
@@ -94,7 +102,7 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
     // Add an item referencing the stored screenshot.
     const item = await request(app)
       .post(`/api/change-requests/${crId}/items`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({
         changeType: ChangeType.Add,
         description: "add a banner",
@@ -108,7 +116,7 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
     // Upload a PDF attachment.
     const att = await request(app)
       .post(`/api/change-requests/${crId}/items/${itemId}/attachments`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ dataBase64: PNG_1x1, mime: "application/pdf", filename: "spec.pdf" });
     expect(att.status).toBe(201);
     expect(att.body.attachment.filename).toBe("spec.pdf");
@@ -120,7 +128,7 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
     // The item detail now includes the attachment.
     const detail = await request(app)
       .get(`/api/change-requests/${crId}`)
-      .set("Cookie", cookie);
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie));
     const items = detail.body.items;
     expect(items[0].attachments).toHaveLength(1);
     expect(items[0].attachments[0].filename).toBe("spec.pdf");
@@ -131,16 +139,16 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
     const { cookie, websiteId } = await loginClient();
     const draft = await request(app)
       .post("/api/change-requests")
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ websiteId });
     const crId = draft.body.changeRequest.id;
     const shot = await request(app)
       .post(`/api/change-requests/${crId}/screenshots`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ dataBase64: PNG_1x1, mime: "image/png" });
     const item = await request(app)
       .post(`/api/change-requests/${crId}/items`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({
         changeType: ChangeType.Add,
         description: "d",
@@ -151,7 +159,7 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
 
     const bad = await request(app)
       .post(`/api/change-requests/${crId}/items/${item.body.item.id}/attachments`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ dataBase64: PNG_1x1, mime: "application/zip", filename: "x.zip" });
     expect(bad.status).toBe(400);
     expect(bad.body.error.code).toBe("VALIDATION_UNSUPPORTED_TYPE");
@@ -190,7 +198,7 @@ describe("Step 2: screenshot + attachment upload (Req 7.3, 9.1-9.4)", () => {
 
     const res = await request(app)
       .post(`/api/change-requests/${crId}/screenshots`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ dataBase64: PNG_1x1, mime: "image/png" });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("AUTHZ_NOT_OWNER");

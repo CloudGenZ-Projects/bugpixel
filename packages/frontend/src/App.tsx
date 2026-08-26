@@ -23,7 +23,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <Link to="/">Home</Link>
         {session && (
           <>
-            <span> · {session.user.email} ({session.user.role})</span>
+            <span>
+              {" "}
+              · {session.user.email} ({session.user.role})
+            </span>
             <button type="button" onClick={logout}>
               Log out
             </button>

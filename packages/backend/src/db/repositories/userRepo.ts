@@ -30,9 +30,9 @@ export function makeUserRepo(db: AppDatabase) {
     },
 
     getByEmail(email: string): User | null {
-      const r = db
-        .prepare(`SELECT * FROM user WHERE email = ?`)
-        .get(email) as Row | undefined;
+      const r = db.prepare(`SELECT * FROM user WHERE email = ?`).get(email) as
+        | Row
+        | undefined;
       return r ? mapUser(r) : null;
     },
 

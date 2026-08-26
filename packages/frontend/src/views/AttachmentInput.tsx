@@ -30,7 +30,9 @@ export function AttachmentInput({ changeType, onFilesAccepted }: AttachmentInput
     const ok: File[] = [];
     for (const f of files) {
       if (!isSupported(f.type)) {
-        setError(`Unsupported file type: ${f.name}. Only PDF or image files are allowed.`);
+        setError(
+          `Unsupported file type: ${f.name}. Only PDF or image files are allowed.`
+        );
         return;
       }
       if (f.size > MAX_ATTACHMENT_SIZE_BYTES) {

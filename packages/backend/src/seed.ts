@@ -106,7 +106,6 @@ function main() {
 
   db.close();
 
-  // eslint-disable-next-line no-console
   console.log(
     [
       "Seed complete.",

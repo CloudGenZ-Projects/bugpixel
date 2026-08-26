@@ -59,10 +59,17 @@ async function login(email: string, password: string): Promise<string> {
     .post("/api/auth/login")
     .send({ identifier: email, password });
   expect(res.status).toBe(200);
-  const cookie = res.headers["set-cookie"][0];
-  expect(cookie).toMatch(/HttpOnly/i);
-  expect(cookie).toMatch(/SameSite=Strict/i);
-  return cookie;
+  const cookies = res.headers["set-cookie"] as unknown as string[];
+  expect(cookies[0]).toMatch(/HttpOnly/i);
+  expect(cookies[0]).toMatch(/SameSite=Strict/i);
+  // Return all cookies (session + csrf) joined for use as a Cookie header.
+  return cookies.map((c) => c.split(";")[0]).join("; ");
+}
+
+/** The CSRF token for a Cookie header string (derived from the csrf cookie). */
+function csrfOf(cookie: string): string {
+  const m = cookie.match(/(?:^|; )csrf=([^;]*)/);
+  return m ? m[1] : "";
 }
 
 const PROTECTED_ROUTES: Array<[string, string]> = [
@@ -103,7 +110,7 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
     seedUser("client@example.com", "pw", Role.Client);
     const cookie = await login("client@example.com", "pw");
 
-    const session = await request(app).get("/api/session").set("Cookie", cookie);
+    const session = await request(app).get("/api/session").set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie));
     expect(session.status).toBe(200);
     expect(session.body.user.role).toBe(Role.Client);
     expect(session.body.view).toBe("client");
@@ -134,14 +141,14 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
 
     const draftRes = await request(app)
       .post("/api/change-requests")
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({ websiteId });
     expect(draftRes.status).toBe(201);
     const crId = draftRes.body.changeRequest.id;
 
     const itemRes = await request(app)
       .post(`/api/change-requests/${crId}/items`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({
         changeType: ChangeType.Add,
         description: "please add a banner",
@@ -153,7 +160,7 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
 
     const submitRes = await request(app)
       .post(`/api/change-requests/${crId}/submit`)
-      .set("Cookie", cookie)
+      .set("Cookie", cookie).set("X-CSRF-Token", csrfOf(cookie))
       .send({});
     expect(submitRes.status).toBe(200);
     expect(submitRes.body.changeRequest.status).toBe(
@@ -184,12 +191,12 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
     const clientCookie = await login("c2@example.com", "pw");
     const draft = await request(app)
       .post("/api/change-requests")
-      .set("Cookie", clientCookie)
+      .set("Cookie", clientCookie).set("X-CSRF-Token", csrfOf(clientCookie))
       .send({ websiteId });
     const crId = draft.body.changeRequest.id;
     await request(app)
       .post(`/api/change-requests/${crId}/items`)
-      .set("Cookie", clientCookie)
+      .set("Cookie", clientCookie).set("X-CSRF-Token", csrfOf(clientCookie))
       .send({
         changeType: ChangeType.Delete,
         description: "remove footer",
@@ -199,13 +206,13 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
       });
     const submit = await request(app)
       .post(`/api/change-requests/${crId}/submit`)
-      .set("Cookie", clientCookie)
+      .set("Cookie", clientCookie).set("X-CSRF-Token", csrfOf(clientCookie))
       .send({});
     expect(submit.body.changeRequest.status).toBe(ChangeRequestStatus.Submitted);
 
     // The assigned developer sees it in their list.
     const devCookie = await login("dev@example.com", "pw");
-    const devList = await request(app).get("/api/change-requests").set("Cookie", devCookie);
+    const devList = await request(app).get("/api/change-requests").set("Cookie", devCookie).set("X-CSRF-Token", csrfOf(devCookie));
     expect(devList.status).toBe(200);
     expect(devList.body.changeRequests.some((r: { id: string }) => r.id === crId)).toBe(true);
   });
@@ -217,18 +224,18 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
     const clientCookie = await login("client@example.com", "pw");
     const denied = await request(app)
       .get("/api/admin/developers")
-      .set("Cookie", clientCookie);
+      .set("Cookie", clientCookie).set("X-CSRF-Token", csrfOf(clientCookie));
     expect(denied.status).toBe(403);
     expect(denied.body.error.code).toBe("AUTHZ_FORBIDDEN");
 
     const adminCookie = await login("admin@example.com", "pw");
     const added = await request(app)
       .post("/api/admin/developers")
-      .set("Cookie", adminCookie)
+      .set("Cookie", adminCookie).set("X-CSRF-Token", csrfOf(adminCookie))
       .send({ identifier: "newdev@example.com", password: "pw" });
     expect(added.status).toBe(201);
 
-    const list = await request(app).get("/api/admin/developers").set("Cookie", adminCookie);
+    const list = await request(app).get("/api/admin/developers").set("Cookie", adminCookie).set("X-CSRF-Token", csrfOf(adminCookie));
     expect(list.body.developers.some((d: { email: string }) => d.email === "newdev@example.com")).toBe(
       true
     );
@@ -236,7 +243,7 @@ describe("Integration 11.6: login -> cookie -> protected, submit routing, admin 
     // Duplicate roster identifier -> 409.
     const dup = await request(app)
       .post("/api/admin/developers")
-      .set("Cookie", adminCookie)
+      .set("Cookie", adminCookie).set("X-CSRF-Token", csrfOf(adminCookie))
       .send({ identifier: "newdev@example.com", password: "pw" });
     expect(dup.status).toBe(409);
     expect(dup.body.error.code).toBe("ROSTER_DUPLICATE");

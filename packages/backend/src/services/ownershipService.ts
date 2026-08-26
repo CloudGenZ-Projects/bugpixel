@@ -34,11 +34,7 @@ export function makeOwnershipService(
 
     assertOwns(clientId, websiteId) {
       if (!this.isOwner(clientId, websiteId)) {
-        throw new ServiceError(
-          "AUTHZ_NOT_OWNER",
-          403,
-          "You do not own this website."
-        );
+        throw new ServiceError("AUTHZ_NOT_OWNER", 403, "You do not own this website.");
       }
     },
 

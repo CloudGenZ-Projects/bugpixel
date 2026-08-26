@@ -21,7 +21,13 @@
  */
 import { useState } from "react";
 
-import { ChangeType, MAX_CONTENT_LENGTH, MAX_DESCRIPTION_LENGTH, type ChangeRequest, type Website } from "@crp/shared";
+import {
+  ChangeType,
+  MAX_CONTENT_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  type ChangeRequest,
+  type Website,
+} from "@crp/shared";
 import { ApiClientError } from "../api/client.js";
 import { endpoints, type AddItemBody } from "../api/endpoints.js";
 import { AttachmentInput } from "./AttachmentInput.js";
@@ -95,10 +101,16 @@ export function ChangeComposer({
     if (!nonBlankWithin(description, MAX_DESCRIPTION_LENGTH)) {
       e.description = "A description of 1 to 2000 characters is required.";
     }
-    if (changeType === ChangeType.Add && !nonBlankWithin(contentAdd, MAX_CONTENT_LENGTH)) {
+    if (
+      changeType === ChangeType.Add &&
+      !nonBlankWithin(contentAdd, MAX_CONTENT_LENGTH)
+    ) {
       e.contentAdd = "Content to add is required.";
     }
-    if (changeType === ChangeType.Delete && !nonBlankWithin(contentDelete, MAX_CONTENT_LENGTH)) {
+    if (
+      changeType === ChangeType.Delete &&
+      !nonBlankWithin(contentDelete, MAX_CONTENT_LENGTH)
+    ) {
       e.contentDelete = "Content to remove is required.";
     }
     if (changeType === ChangeType.Update) {

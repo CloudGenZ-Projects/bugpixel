@@ -124,7 +124,7 @@ export class Inspector {
     let screenshot: ScreenshotResult;
     try {
       screenshot = await this.config.captureScreenshot(el);
-    } catch (err) {
+    } catch {
       // Keep the selection so the client can retry (Req 7.4).
       const e = new Error(
         "Screenshot capture failed. Please retry the selection."

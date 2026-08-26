@@ -1,13 +1,7 @@
 /**
  * Typed endpoint wrappers over the API client, mirroring the backend routes.
  */
-import type {
-  ChangeRequest,
-  ChangeItem,
-  Role,
-  Website,
-  Assignment,
-} from "@crp/shared";
+import type { ChangeRequest, ChangeItem, Role, Website, Assignment } from "@crp/shared";
 import { api } from "./client.js";
 
 export interface SessionUser {
@@ -23,8 +17,18 @@ export interface SessionResponse {
 
 export interface ChangeItemDetail {
   item: ChangeItem;
-  componentReference: { id: string; selector: string | null; htmlMeta: string | null } | null;
-  screenshot: { id: string; storageKey: string; mime: string; width: number; height: number } | null;
+  componentReference: {
+    id: string;
+    selector: string | null;
+    htmlMeta: string | null;
+  } | null;
+  screenshot: {
+    id: string;
+    storageKey: string;
+    mime: string;
+    width: number;
+    height: number;
+  } | null;
   attachments: Array<{ id: string; filename: string; mime: string; sizeBytes: number }>;
 }
 
@@ -60,10 +64,10 @@ export const endpoints = {
   addItem: (requestId: string, body: AddItemBody) =>
     api.post<{ item: ChangeItem }>(`/api/change-requests/${requestId}/items`, body),
   uploadScreenshot: (requestId: string, dataBase64: string, mime: string) =>
-    api.post<{ storageKey: string }>(
-      `/api/change-requests/${requestId}/screenshots`,
-      { dataBase64, mime }
-    ),
+    api.post<{ storageKey: string }>(`/api/change-requests/${requestId}/screenshots`, {
+      dataBase64,
+      mime,
+    }),
   uploadAttachment: (
     requestId: string,
     itemId: string,
@@ -71,22 +75,29 @@ export const endpoints = {
     mime: string,
     filename: string
   ) =>
-    api.post<{ attachment: { id: string; filename: string; mime: string; sizeBytes: number } }>(
-      `/api/change-requests/${requestId}/items/${itemId}/attachments`,
-      { dataBase64, mime, filename }
-    ),
+    api.post<{
+      attachment: { id: string; filename: string; mime: string; sizeBytes: number };
+    }>(`/api/change-requests/${requestId}/items/${itemId}/attachments`, {
+      dataBase64,
+      mime,
+      filename,
+    }),
   submit: (requestId: string) =>
-    api.post<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/submit`),
+    api.post<{ changeRequest: ChangeRequest }>(
+      `/api/change-requests/${requestId}/submit`
+    ),
 
   listChangeRequests: () =>
     api.get<{ changeRequests: ChangeRequest[] }>("/api/change-requests"),
   changeRequestDetail: (id: string) =>
     api.get<ChangeRequestDetail>(`/api/change-requests/${id}`),
 
-  listDevelopers: () =>
-    api.get<{ developers: SessionUser[] }>("/api/admin/developers"),
+  listDevelopers: () => api.get<{ developers: SessionUser[] }>("/api/admin/developers"),
   addDeveloper: (identifier: string, password: string) =>
-    api.post<{ developer: SessionUser }>("/api/admin/developers", { identifier, password }),
+    api.post<{ developer: SessionUser }>("/api/admin/developers", {
+      identifier,
+      password,
+    }),
   removeDeveloper: (id: string) => api.del<{ ok: true }>(`/api/admin/developers/${id}`),
   listAssignments: () => api.get<{ assignments: Assignment[] }>("/api/admin/assignments"),
   setAssignment: (projectId: string, developerId: string) =>
