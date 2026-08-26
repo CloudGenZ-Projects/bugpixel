@@ -47,6 +47,10 @@ export function makeUserRepo(db: AppDatabase) {
     remove(id: string): void {
       db.prepare(`DELETE FROM user WHERE id = ?`).run(id);
     },
+
+    updatePassword(id: string, passwordHash: string): void {
+      db.prepare(`UPDATE user SET password_hash = ? WHERE id = ?`).run(passwordHash, id);
+    },
   };
 }
 

@@ -91,6 +91,20 @@ function main(): void {
   const portalOrigin = resolvePortalOrigin();
   const websiteId = resolveWebsiteId();
 
+  // Capture recent console errors for debugging context
+  const consoleErrors: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    consoleErrors.push(args.map(String).join(" ").slice(0, 500));
+    if (consoleErrors.length > 10) consoleErrors.shift();
+    originalError.apply(console, args);
+  };
+  // Also capture unhandled errors
+  window.addEventListener("error", (e) => {
+    consoleErrors.push(`${e.message} at ${e.filename}:${e.lineno}`);
+    if (consoleErrors.length > 10) consoleErrors.shift();
+  });
+
   const inspector = new Inspector({
     portalOrigin,
     websiteId,

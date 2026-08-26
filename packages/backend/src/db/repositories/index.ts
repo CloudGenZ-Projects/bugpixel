@@ -8,6 +8,7 @@ import { makeWebsiteRepo } from "./websiteRepo.js";
 import { makeAssignmentRepo } from "./assignmentRepo.js";
 import { makeChangeRequestRepo } from "./changeRequestRepo.js";
 import { makeNoteRepo } from "./noteRepo.js";
+import { makeActivityRepo } from "./activityRepo.js";
 import {
   makeChangeItemRepo,
   makeComponentReferenceRepo,
@@ -42,6 +43,7 @@ export function makeRepositories(db: AppDatabase) {
     screenshots: makeScreenshotRepo(db),
     attachments: makeAttachmentRepo(db),
     notes: makeNoteRepo(db),
+    activities: makeActivityRepo(db),
   };
 }
 
@@ -54,3 +56,4 @@ export * from "./assignmentRepo.js";
 export * from "./changeRequestRepo.js";
 export * from "./changeItemRepo.js";
 export * from "./noteRepo.js";
+export * from "./activityRepo.js";

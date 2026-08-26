@@ -49,6 +49,21 @@ export interface CapturedSelection {
   selector: string | null;
   htmlMeta: string | null;
   screenshot: ScreenshotResult;
+  /** Browser and OS info captured at selection time. */
+  browserInfo: BrowserInfo;
+  /** Recent console errors (last 10) captured before the selection. */
+  consoleErrors: string[];
+}
+
+export interface BrowserInfo {
+  userAgent: string;
+  platform: string;
+  language: string;
+  screenWidth: number;
+  screenHeight: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  url: string;
 }
 
 /** Compute a best-effort CSS selector for an element (optional metadata). */
@@ -133,7 +148,19 @@ export class Inspector {
       throw e;
     }
 
-    const capture: CapturedSelection = { selector, htmlMeta, screenshot };
+    const capture: CapturedSelection = { selector, htmlMeta, screenshot,
+      browserInfo: {
+        userAgent: this.win.navigator.userAgent,
+        platform: this.win.navigator.platform,
+        language: this.win.navigator.language,
+        screenWidth: this.win.screen.width,
+        screenHeight: this.win.screen.height,
+        viewportWidth: this.win.innerWidth,
+        viewportHeight: this.win.innerHeight,
+        url: this.win.location.href,
+      },
+      consoleErrors: [],
+    };
     // Hand the capture to the opener/portal (Req 7.3).
     this.opener?.postMessage(
       { type: "INSPECTOR_CAPTURE", payload: capture },

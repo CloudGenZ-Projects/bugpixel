@@ -58,9 +58,19 @@ export function ChangeRequestDetail() {
           <h1 className="text-xl font-bold text-gray-900">
             Request #{request.id.slice(0, 8)}
           </h1>
-          <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_STYLES[request.status] ?? ""}`}>
-            {request.status}
-          </span>
+          <div className="flex items-center gap-2">
+            <a
+              href={`/api/change-requests/${request.id}/export`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+            >
+              📄 Export
+            </a>
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_STYLES[request.status] ?? ""}`}>
+              {request.status}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-4 text-sm text-gray-500">
           <span>Priority: <strong className="text-gray-700">{request.priority}</strong></span>

@@ -30,6 +30,16 @@ export interface AppOptions {
   allowedOrigins?: string[];
 }
 
+/** Escape HTML special characters to prevent XSS in rendered output. */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function decodeBase64Payload(input: unknown): Uint8Array {
   if (typeof input !== "string" || input.length === 0) {
     throw new ServiceError(
@@ -352,6 +362,15 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       }
 
       container.repos.changeRequests.updateStatus(cr.id, status as ChangeRequestStatus);
+      // Log activity
+      container.repos.activities.create({
+        id: uuid(),
+        changeRequestId: cr.id,
+        actorId: s.userId,
+        action: "status_change",
+        detail: `${cr.status} → ${status}`,
+        createdAt: new Date(container.clock.now()).toISOString(),
+      });
       res.json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
     })
   );
@@ -407,6 +426,77 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
+  // === Activity feed ========================================================
+  app.get(
+    "/api/change-requests/:id/activity",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const activities = container.repos.activities.listByRequest(req.params.id);
+      const enriched = activities.map((a) => {
+        const actor = container.repos.users.getById(a.actorId);
+        return { ...a, actorEmail: actor?.email ?? "unknown" };
+      });
+      res.json({ activities: enriched });
+    })
+  );
+
+  // === Bulk status update ==================================================
+  app.post(
+    "/api/change-requests/bulk-status",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const { ids, status } = req.body ?? {};
+      const s = req.session!;
+      if (!Array.isArray(ids) || !status) {
+        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", "ids (array) and status are required."));
+      }
+      if (s.role !== Role.Admin && s.role !== Role.Developer) {
+        return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Only developers or admins can bulk update."));
+      }
+      let updated = 0;
+      for (const id of ids) {
+        const cr = container.repos.changeRequests.getById(id);
+        if (!cr) continue;
+        container.repos.changeRequests.updateStatus(cr.id, status as ChangeRequestStatus);
+        container.repos.activities.create({
+          id: uuid(),
+          changeRequestId: cr.id,
+          actorId: s.userId,
+          action: "status_change",
+          detail: `${cr.status} → ${status} (bulk)`,
+          createdAt: new Date(container.clock.now()).toISOString(),
+        });
+        updated++;
+      }
+      res.json({ updated });
+    })
+  );
+
+  // === Password change (self-service) ======================================
+  app.post(
+    "/api/auth/change-password",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const { currentPassword, newPassword } = req.body ?? {};
+      if (!currentPassword || !newPassword || typeof newPassword !== "string" || newPassword.length < 8) {
+        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "New password must be at least 8 characters."));
+      }
+      const user = container.repos.users.getById(req.session!.userId);
+      if (!user) return res.status(401).json(makeApiError("AUTH_REQUIRED", "User not found."));
+
+      // Verify current password using the auth service
+      try {
+        container.auth.login(user.email, String(currentPassword));
+      } catch {
+        return res.status(401).json(makeApiError("AUTH_INVALID_CREDENTIALS", "Current password is incorrect."));
+      }
+
+      const newHash = container.auth.hashPassword(String(newPassword));
+      container.repos.users.updatePassword(user.id, newHash);
+      res.json({ ok: true });
+    })
+  );
+
   // === Analytics / reporting ================================================
   app.get(
     "/api/analytics/monthly",
@@ -423,6 +513,64 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     asyncHandler((_req: Request, res: Response) => {
       const counts = container.repos.changeRequests.getStatusCounts();
       res.json({ counts });
+    })
+  );
+
+  // === Export change request as printable HTML (PDF via browser print) ======
+  app.get(
+    "/api/change-requests/:id/export",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const s = req.session!;
+      const cr = container.repos.changeRequests.getById(req.params.id);
+      if (!cr) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
+
+      const items = container.repos.changeItems.listByRequest(cr.id).map((item) => ({
+        item,
+        screenshot: container.repos.screenshots.getByItem(item.id),
+        componentReference: container.repos.componentReferences.getByItem(item.id),
+      }));
+      const website = container.repos.websites.getById(cr.websiteId);
+
+      const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Change Request #${cr.id.slice(0, 8)}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #111; }
+  h1 { font-size: 24px; border-bottom: 2px solid #6366f1; padding-bottom: 8px; }
+  .meta { color: #666; font-size: 14px; margin-bottom: 24px; }
+  .item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; page-break-inside: avoid; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .badge-add { background: #d1fae5; color: #065f46; }
+  .badge-update { background: #dbeafe; color: #1e40af; }
+  .badge-delete { background: #fee2e2; color: #991b1b; }
+  .content-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin: 8px 0; font-size: 14px; }
+  img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 6px; }
+  @media print { body { margin: 0; } .item { break-inside: avoid; } }
+</style></head><body>
+<h1>Change Request #${cr.id.slice(0, 8)}</h1>
+<div class="meta">
+  <p><strong>Website:</strong> ${website?.name ?? "Unknown"} (${website?.url ?? ""})</p>
+  <p><strong>Status:</strong> ${cr.status} | <strong>Priority:</strong> ${cr.priority}</p>
+  <p><strong>Submitted:</strong> ${cr.submittedAt ? new Date(cr.submittedAt).toLocaleString() : "Draft"}</p>
+  ${cr.dueDate ? `<p><strong>Due:</strong> ${cr.dueDate}</p>` : ""}
+</div>
+<h2>${items.length} Change Item${items.length !== 1 ? "s" : ""}</h2>
+${items.map(({ item, screenshot, componentReference }, i) => `
+<div class="item">
+  <p><strong>#${i + 1}</strong> <span class="badge badge-${item.changeType.toLowerCase()}">${item.changeType}</span>
+    ${componentReference?.selector ? `<code>${escapeHtml(componentReference.selector)}</code>` : ""}</p>
+  <p>${escapeHtml(item.description)}</p>
+  ${item.contentAdd ? `<div class="content-box"><strong>Add:</strong> ${escapeHtml(item.contentAdd)}</div>` : ""}
+  ${item.contentCurrent ? `<div class="content-box"><strong>Current:</strong> ${escapeHtml(item.contentCurrent)}</div>` : ""}
+  ${item.contentUpdated ? `<div class="content-box"><strong>Updated:</strong> ${escapeHtml(item.contentUpdated)}</div>` : ""}
+  ${item.contentDelete ? `<div class="content-box"><strong>Remove:</strong> ${escapeHtml(item.contentDelete)}</div>` : ""}
+  ${screenshot ? `<img src="/api/files/${screenshot.storageKey}" alt="Screenshot" />` : ""}
+</div>`).join("\n")}
+<p style="color:#999;font-size:12px;margin-top:32px;">Generated by BugPixel on ${new Date().toISOString()}</p>
+</body></html>`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
     })
   );
 

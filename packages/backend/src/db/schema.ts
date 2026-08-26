@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS note (
   created_at        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS activity (
+  id                TEXT PRIMARY KEY,
+  change_request_id TEXT NOT NULL REFERENCES change_request (id) ON DELETE CASCADE,
+  actor_id          TEXT NOT NULL REFERENCES user (id),
+  action            TEXT NOT NULL,
+  detail            TEXT,
+  created_at        TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_website_owner_client ON website (owner_client_id);
 CREATE INDEX IF NOT EXISTS idx_website_project ON website (project_id);
 CREATE INDEX IF NOT EXISTS idx_change_request_client ON change_request (client_id);
@@ -101,4 +110,5 @@ CREATE INDEX IF NOT EXISTS idx_change_request_status ON change_request (status);
 CREATE INDEX IF NOT EXISTS idx_change_item_request ON change_item (change_request_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_developer ON assignment (developer_id);
 CREATE INDEX IF NOT EXISTS idx_note_request ON note (change_request_id);
+CREATE INDEX IF NOT EXISTS idx_activity_request ON activity (change_request_id);
 `;

@@ -59,6 +59,7 @@ export function ChangeComposer({
 }: ChangeComposerProps) {
   const [changeType, setChangeType] = useState<ChangeType>(ChangeType.Add);
   const [priority, setPriority] = useState<Priority>(Priority.Medium);
+  const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
   const [contentAdd, setContentAdd] = useState("");
   const [contentDelete, setContentDelete] = useState("");
@@ -214,7 +215,7 @@ export function ChangeComposer({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="grid grid-cols-3 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Change Type</label>
             <select
@@ -239,6 +240,15 @@ export function ChangeComposer({
               <option value="Medium">🔵 Medium</option>
               <option value="Low">⚪ Low</option>
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Due Date <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+            />
           </div>
         </div>
 

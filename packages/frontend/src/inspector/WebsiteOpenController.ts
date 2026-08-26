@@ -25,6 +25,8 @@ export interface CapturedSelection {
   selector: string | null;
   htmlMeta: string | null;
   screenshot: { dataUrl: string; mime: string; width: number; height: number };
+  browserInfo?: { userAgent: string; platform: string; language: string; screenWidth: number; screenHeight: number; viewportWidth: number; viewportHeight: number; url: string };
+  consoleErrors?: string[];
 }
 
 export interface WebsiteOpenControllerOptions {
