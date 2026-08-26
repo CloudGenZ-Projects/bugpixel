@@ -1,7 +1,7 @@
 /**
- * Typed endpoint wrappers over the API client, mirroring the backend routes.
+ * Typed endpoint wrappers over the API client.
  */
-import type { ChangeRequest, ChangeItem, Role, Website, Assignment } from "@crp/shared";
+import type { ChangeRequest, ChangeItem, Role, Website, Assignment, Note } from "@crp/shared";
 import { api } from "./client.js";
 
 export interface SessionUser {
@@ -29,7 +29,7 @@ export interface ChangeItemDetail {
     width: number;
     height: number;
   } | null;
-  attachments: Array<{ id: string; filename: string; mime: string; sizeBytes: number }>;
+  attachments: Array<{ id: string; filename: string; mime: string; sizeBytes: number; storageKey: string }>;
 }
 
 export interface ChangeRequestDetail {
@@ -48,6 +48,18 @@ export interface AddItemBody {
   screenshot: { storageKey: string; mime: string; width: number; height: number };
 }
 
+export interface EnrichedNote extends Note {
+  authorEmail: string;
+}
+
+export interface MonthlyStats {
+  month: string;
+  submitted: number;
+  done: number;
+  rejected: number;
+  inProgress: number;
+}
+
 export const endpoints = {
   login: (identifier: string, password: string) =>
     api.post<{ user: SessionUser }>("/api/auth/login", { identifier, password }),
@@ -59,8 +71,8 @@ export const endpoints = {
   mintInspectorToken: (websiteId: string) =>
     api.post<{ token: string; expiresIn: number }>("/api/inspector/token", { websiteId }),
 
-  createChangeRequest: (websiteId: string) =>
-    api.post<{ changeRequest: ChangeRequest }>("/api/change-requests", { websiteId }),
+  createChangeRequest: (websiteId: string, priority?: string) =>
+    api.post<{ changeRequest: ChangeRequest }>("/api/change-requests", { websiteId, priority }),
   addItem: (requestId: string, body: AddItemBody) =>
     api.post<{ item: ChangeItem }>(`/api/change-requests/${requestId}/items`, body),
   uploadScreenshot: (requestId: string, dataBase64: string, mime: string) =>
@@ -87,11 +99,35 @@ export const endpoints = {
       `/api/change-requests/${requestId}/submit`
     ),
 
+  // Status transitions (developer/admin)
+  updateStatus: (requestId: string, status: string) =>
+    api.patch<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/status`, { status }),
+
+  // Priority update
+  updatePriority: (requestId: string, priority: string) =>
+    api.patch<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/priority`, { priority }),
+
   listChangeRequests: () =>
     api.get<{ changeRequests: ChangeRequest[] }>("/api/change-requests"),
   changeRequestDetail: (id: string) =>
     api.get<ChangeRequestDetail>(`/api/change-requests/${id}`),
 
+  // Notes
+  listNotes: (requestId: string) =>
+    api.get<{ notes: EnrichedNote[] }>(`/api/change-requests/${requestId}/notes`),
+  addNote: (requestId: string, content: string) =>
+    api.post<{ note: EnrichedNote }>(`/api/change-requests/${requestId}/notes`, { content }),
+
+  // Analytics
+  monthlyStats: (months?: number) =>
+    api.get<{ stats: MonthlyStats[] }>(`/api/analytics/monthly${months ? `?months=${months}` : ""}`),
+  summaryStats: () =>
+    api.get<{ counts: Record<string, number> }>("/api/analytics/summary"),
+
+  // File serving (screenshots/attachments)
+  fileUrl: (storageKey: string) => `/api/files/${storageKey}`,
+
+  // Admin
   listDevelopers: () => api.get<{ developers: SessionUser[] }>("/api/admin/developers"),
   addDeveloper: (identifier: string, password: string) =>
     api.post<{ developer: SessionUser }>("/api/admin/developers", {

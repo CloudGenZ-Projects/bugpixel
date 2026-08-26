@@ -1,13 +1,12 @@
 /// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
-    // Dev proxy: forward API + inspector requests to the backend so the SPA and
-    // API share an origin during development (cookies/CSRF work as in prod).
     proxy: {
       "/api": { target: "http://localhost:3000", changeOrigin: true },
       "/inspector": { target: "http://localhost:3000", changeOrigin: true },

@@ -24,4 +24,15 @@ export enum ChangeRequestStatus {
   Draft = "Draft",
   Submitted = "Submitted",
   AwaitingDeveloperAssignment = "AwaitingDeveloperAssignment",
+  InProgress = "InProgress",
+  Done = "Done",
+  Rejected = "Rejected",
+}
+
+/** Priority level for a Change_Request. */
+export enum Priority {
+  Critical = "Critical",
+  High = "High",
+  Medium = "Medium",
+  Low = "Low",
 }

@@ -1,19 +1,15 @@
 /**
- * Express application factory. Wires every route from the design's API surface
- * to the service container, applies auth/role/ownership middleware, and installs
- * the consistent JSON error handler.
- *
- * Session cookie is HTTP-only, SameSite=Strict, and Secure in production.
- *
- * Requirements: 1.1-1.4, 2.2-2.5, 3.1-3.3, 4.1, 4.2, 5.1, 6.1, 6.2, 7.3, 8.9,
- * 9.1, 10.x, 11.x, 12.x, 13.x, 14.x, 15.1-15.4
+ * Express application factory. Wires routes, applies auth/role middleware, and
+ * installs security headers + error handler.
  */
 import express, { type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
+import { v4 as uuid } from "uuid";
 
-import { Role, makeApiError } from "@crp/shared";
+import { Role, ChangeRequestStatus, Priority, makeApiError } from "@crp/shared";
 import type { Container } from "../container.js";
 import { ServiceError } from "../services/serviceError.js";
+import { makeRateLimiter } from "../services/rateLimiter.js";
 import {
   SESSION_COOKIE,
   CSRF_COOKIE,
@@ -27,31 +23,13 @@ import {
 } from "./middleware.js";
 
 export interface AppOptions {
-  /** When true, the session cookie is marked Secure (production/HTTPS). */
   secureCookies?: boolean;
-  /**
-   * When true, enforce HTTPS: send HSTS on every response and redirect plain
-   * HTTP requests to https (Req 15.5). Enable in production behind a
-   * TLS-terminating proxy that sets X-Forwarded-Proto.
-   */
   enforceHttps?: boolean;
-  /** Absolute path to the built SPA to serve (optional). */
   spaDir?: string;
-  /** Absolute path to the built inspector script directory (optional). */
   inspectorDir?: string;
-  /**
-   * Origins allowed to make credentialed cross-origin requests (e.g. a sample
-   * client website hosted on a different origin using the inspector). Each
-   * listed origin is reflected in Access-Control-Allow-Origin with credentials
-   * enabled. Same-origin requests never need this.
-   */
   allowedOrigins?: string[];
 }
 
-/**
- * Decode a base64 or data-URL image/file payload into raw bytes. Accepts either
- * a bare base64 string or a `data:<mime>;base64,<data>` data URL.
- */
 function decodeBase64Payload(input: unknown): Uint8Array {
   if (typeof input !== "string" || input.length === 0) {
     throw new ServiceError(
@@ -70,10 +48,12 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   const app = express();
   app.set("trust proxy", true);
 
-  // --- Security headers + HTTPS enforcement (Req 15.5) ---------------------
+  // --- Rate limiters -------------------------------------------------------
+  const loginLimiter = makeRateLimiter({ maxRequests: 5, windowMs: 60_000 });
+  const apiLimiter = makeRateLimiter({ maxRequests: 100, windowMs: 60_000 });
+
+  // --- Security headers + HTTPS enforcement --------------------------------
   app.use((req, res, next) => {
-    // Baseline security headers (align with Golden Path HTTP security headers
-    // guidance: HSTS, X-Content-Type-Options, X-Frame-Options).
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -82,7 +62,6 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       const proto = req.headers["x-forwarded-proto"];
       const isHttps = req.secure || proto === "https";
       if (!isHttps) {
-        // Redirect plain HTTP to HTTPS.
         return res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
       }
     }
@@ -92,9 +71,16 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   app.use(express.json({ limit: "15mb" }));
   app.use(cookieParser());
 
-  // --- CORS for credentialed cross-origin callers (e.g. the inspector on a
-  // client website hosted on a different origin). Only listed origins are
-  // allowed, and only with credentials so cookies/CSRF flow correctly.
+  // --- Global API rate limit -----------------------------------------------
+  app.use("/api", (req, res, next) => {
+    const key = req.ip ?? "unknown";
+    if (!apiLimiter.allow(key)) {
+      return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many requests. Try again shortly." } });
+    }
+    next();
+  });
+
+  // --- CORS for cross-origin callers ---------------------------------------
   const allowedOrigins = new Set(options.allowedOrigins ?? []);
   if (allowedOrigins.size > 0) {
     app.use((req, res, next) => {
@@ -103,11 +89,9 @@ export function makeApp(container: Container, options: AppOptions = {}) {
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Vary", "Origin");
         res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token");
-        if (req.method === "OPTIONS") {
-          return res.status(204).end();
-        }
+        if (req.method === "OPTIONS") return res.status(204).end();
       }
       next();
     });
@@ -116,9 +100,8 @@ export function makeApp(container: Container, options: AppOptions = {}) {
   const requireSession = makeRequireSession(container);
   const requireAdmin = [requireSession, makeRequireRole(container, Role.Admin)];
   const requireClient = [requireSession, makeRequireRole(container, Role.Client)];
+  const requireDeveloper = [requireSession, makeRequireRole(container, Role.Developer)];
 
-  // CSRF protection on state-changing API requests. Login (no session yet) and
-  // the cross-origin inspector validate endpoint (token-gated) are exempt.
   app.use(
     "/api",
     makeCsrf(container.csrfSecret, ["/api/auth/login", "/api/inspector/validate"])
@@ -131,7 +114,6 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       secure: options.secureCookies ?? false,
       path: "/",
     });
-    // Companion CSRF cookie: readable by JS (double-submit), same-site.
     res.cookie(CSRF_COOKIE, csrfTokenFor(sid, container.csrfSecret), {
       httpOnly: false,
       sameSite: "strict",
@@ -140,10 +122,15 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     });
   }
 
-  // --- Auth + session ------------------------------------------------------
+  // === Auth + session ======================================================
   app.post(
     "/api/auth/login",
     asyncHandler((req: Request, res: Response) => {
+      // Rate limit login attempts
+      const key = req.ip ?? "unknown";
+      if (!loginLimiter.allow(key)) {
+        return res.status(429).json({ error: { code: "RATE_LIMITED", message: "Too many login attempts. Try again in a minute." } });
+      }
       const { identifier, password } = req.body ?? {};
       const { session, user } = container.auth.login(
         String(identifier),
@@ -181,7 +168,34 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // --- Websites (client) ---------------------------------------------------
+  // === File serving (screenshots + attachments) ============================
+  app.get(
+    "/api/files/:key",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const key = req.params.key;
+      // Validate key is hex only to prevent path traversal
+      if (!/^[0-9a-f]{64}$/.test(key)) {
+        return res.status(400).json(makeApiError("AUTH_REQUIRED", "Invalid file key."));
+      }
+      if (!container.fileStore.exists(key)) {
+        return res.status(404).json(makeApiError("AUTH_REQUIRED", "File not found."));
+      }
+      const bytes = container.fileStore.read(key);
+      // Infer content type from magic bytes or default to octet-stream
+      let contentType = "application/octet-stream";
+      if (bytes[0] === 0x89 && bytes[1] === 0x50) contentType = "image/png";
+      else if (bytes[0] === 0xFF && bytes[1] === 0xD8) contentType = "image/jpeg";
+      else if (bytes[0] === 0x25 && bytes[1] === 0x50) contentType = "application/pdf";
+      else if (bytes[0] === 0x47 && bytes[1] === 0x49) contentType = "image/gif";
+
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(Buffer.from(bytes));
+    })
+  );
+
+  // === Websites (client) ===================================================
   app.get(
     "/api/websites",
     requireClient,
@@ -190,7 +204,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // --- Inspector token -----------------------------------------------------
+  // === Inspector token =====================================================
   app.post(
     "/api/inspector/token",
     requireClient,
@@ -214,17 +228,21 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // --- Change requests (client compose + submit) ---------------------------
+  // === Change requests (client compose + submit) ===========================
   app.post(
     "/api/change-requests",
     requireClient,
     asyncHandler((req: Request, res: Response) => {
-      const { websiteId } = req.body ?? {};
+      const { websiteId, priority } = req.body ?? {};
       const cr = container.changeRequests.createDraft(
         req.session!.userId,
         String(websiteId)
       );
-      res.status(201).json({ changeRequest: cr });
+      // Update priority if provided
+      if (priority && Object.values(Priority).includes(priority)) {
+        container.repos.changeRequests.updatePriority(cr.id, priority);
+      }
+      res.status(201).json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
     })
   );
 
@@ -241,8 +259,6 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // Upload a captured screenshot blob; returns the opaque storage key the
-  // client then includes in the addItem body (Req 7.3).
   app.post(
     "/api/change-requests/:id/screenshots",
     requireClient,
@@ -259,8 +275,6 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // Upload an attachment for an item (Add/Update only); validated + persisted
-  // (Req 9.1-9.4).
   app.post(
     "/api/change-requests/:id/items/:itemId/attachments",
     requireClient,
@@ -289,8 +303,117 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // Role-scoped list + detail. The list is dispatched by role; detail is
-  // dispatched by role with ownership/assignment checks in the service.
+  // === Change request status transitions (developer/admin) =================
+  app.patch(
+    "/api/change-requests/:id/status",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const { status } = req.body ?? {};
+      const s = req.session!;
+      const cr = container.repos.changeRequests.getById(req.params.id);
+      if (!cr) {
+        return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
+      }
+
+      // Validate the transition is allowed
+      const validTransitions: Record<string, string[]> = {
+        Submitted: ["InProgress", "Rejected"],
+        AwaitingDeveloperAssignment: ["InProgress", "Rejected"],
+        InProgress: ["Done", "Rejected"],
+        Done: [], // terminal
+        Rejected: ["InProgress"], // can reopen
+      };
+
+      const allowed = validTransitions[cr.status] ?? [];
+      if (!allowed.includes(status)) {
+        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", `Cannot transition from ${cr.status} to ${status}.`));
+      }
+
+      // Only developers assigned to the project or admins can transition
+      if (s.role === Role.Developer) {
+        if (!container.ownership.canDeveloperView(s.userId, cr.id)) {
+          return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Not assigned to this request."));
+        }
+      } else if (s.role !== Role.Admin) {
+        return res.status(403).json(makeApiError("AUTHZ_FORBIDDEN", "Only developers or admins can update status."));
+      }
+
+      container.repos.changeRequests.updateStatus(cr.id, status as ChangeRequestStatus);
+      res.json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
+    })
+  );
+
+  // === Change request priority update ======================================
+  app.patch(
+    "/api/change-requests/:id/priority",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const { priority } = req.body ?? {};
+      if (!Object.values(Priority).includes(priority)) {
+        return res.status(400).json(makeApiError("AUTHZ_FORBIDDEN", "Invalid priority."));
+      }
+      const cr = container.repos.changeRequests.getById(req.params.id);
+      if (!cr) return res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
+      container.repos.changeRequests.updatePriority(cr.id, priority);
+      res.json({ changeRequest: container.repos.changeRequests.getById(cr.id) });
+    })
+  );
+
+  // === Notes (comments) on change requests =================================
+  app.get(
+    "/api/change-requests/:id/notes",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const notes = container.repos.notes.listByRequest(req.params.id);
+      // Enrich with author email
+      const enriched = notes.map((n) => {
+        const author = container.repos.users.getById(n.authorId);
+        return { ...n, authorEmail: author?.email ?? "unknown" };
+      });
+      res.json({ notes: enriched });
+    })
+  );
+
+  app.post(
+    "/api/change-requests/:id/notes",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const { content } = req.body ?? {};
+      if (!content || typeof content !== "string" || content.trim().length === 0) {
+        return res.status(400).json(makeApiError("VALIDATION_DESCRIPTION_REQUIRED", "Note content is required."));
+      }
+      const note = container.repos.notes.create({
+        id: uuid(),
+        changeRequestId: req.params.id,
+        authorId: req.session!.userId,
+        content: content.trim(),
+        createdAt: new Date(container.clock.now()).toISOString(),
+      });
+      const author = container.repos.users.getById(note.authorId);
+      res.status(201).json({ note: { ...note, authorEmail: author?.email ?? "unknown" } });
+    })
+  );
+
+  // === Analytics / reporting ================================================
+  app.get(
+    "/api/analytics/monthly",
+    requireSession,
+    asyncHandler((req: Request, res: Response) => {
+      const months = Number(req.query.months) || 12;
+      res.json({ stats: container.repos.changeRequests.getMonthlyStats(months) });
+    })
+  );
+
+  app.get(
+    "/api/analytics/summary",
+    requireSession,
+    asyncHandler((_req: Request, res: Response) => {
+      const counts = container.repos.changeRequests.getStatusCounts();
+      res.json({ counts });
+    })
+  );
+
+  // === Role-scoped listing + detail ========================================
   app.get(
     "/api/change-requests",
     requireSession,
@@ -316,13 +439,12 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       } else if (s.role === Role.Developer) {
         res.json(container.listing.developerDetail(s.userId, req.params.id));
       } else {
-        // Admin can view any request's full payload.
         res.json(container.listing.adminDetail(req.params.id));
       }
     })
   );
 
-  // --- Admin: roster -------------------------------------------------------
+  // === Admin: roster =======================================================
   app.get(
     "/api/admin/developers",
     requireAdmin,
@@ -341,9 +463,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
       const { identifier, password } = req.body ?? {};
       const passwordHash = container.auth.hashPassword(String(password ?? ""));
       const dev = container.roster.add({ identifier: String(identifier), passwordHash });
-      res
-        .status(201)
-        .json({ developer: { id: dev.id, email: dev.email, role: dev.role } });
+      res.status(201).json({ developer: { id: dev.id, email: dev.email, role: dev.role } });
     })
   );
 
@@ -356,7 +476,7 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     })
   );
 
-  // --- Admin: assignments --------------------------------------------------
+  // === Admin: assignments ==================================================
   app.get(
     "/api/admin/assignments",
     requireAdmin,
@@ -392,13 +512,12 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     res.status(404).json(makeApiError("AUTH_REQUIRED", "Not found."));
   });
 
-  // Serve the injected inspector script from the portal origin (Req 17.1) so
-  // client websites can include <script src="https://portal/inspector/...">.
+  // Serve the injected inspector script from the portal origin.
   if (options.inspectorDir) {
     app.use("/inspector", express.static(options.inspectorDir));
   }
 
-  // Serve the built SPA and support client-side routing (deep links).
+  // Serve the built SPA and support client-side routing.
   if (options.spaDir) {
     const spaDir = options.spaDir;
     app.use(express.static(spaDir));

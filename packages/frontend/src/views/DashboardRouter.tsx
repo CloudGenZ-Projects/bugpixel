@@ -1,5 +1,5 @@
 /**
- * Dashboard router: renders the role-appropriate dashboard (Req 2.2).
+ * Dispatches to role-specific dashboard.
  */
 import { useSession } from "../auth/SessionContext.js";
 import { ClientDashboard } from "./ClientDashboard.js";

@@ -1,20 +1,20 @@
 /**
  * Row-mapping helpers between snake_case SQLite columns and the camelCase
- * `@crp/shared` entity interfaces. Repositories use these so mapping logic is
- * defined in exactly one place.
+ * `@crp/shared` entity interfaces.
  */
 import type {
   Assignment,
   ChangeItem,
   ChangeRequest,
   ComponentReference,
+  Note,
   Project,
   Screenshot,
   Attachment,
   User,
   Website,
 } from "@crp/shared";
-import { ChangeRequestStatus, ChangeType, Role } from "@crp/shared";
+import { ChangeRequestStatus, ChangeType, Priority, Role } from "@crp/shared";
 
 /** A generic SQLite row: column name -> primitive value. */
 export type Row = Record<string, unknown>;
@@ -68,8 +68,10 @@ export function mapChangeRequest(r: Row): ChangeRequest {
     websiteId: str(r.website_id),
     clientId: str(r.client_id),
     status: str(r.status) as ChangeRequestStatus,
+    priority: (str(r.priority) || "Medium") as Priority,
     createdAt: str(r.created_at),
     submittedAt: strOrNull(r.submitted_at),
+    dueDate: strOrNull(r.due_date),
   };
 }
 
@@ -115,5 +117,15 @@ export function mapAttachment(r: Row): Attachment {
     filename: str(r.filename),
     mime: str(r.mime),
     sizeBytes: num(r.size_bytes),
+  };
+}
+
+export function mapNote(r: Row): Note {
+  return {
+    id: str(r.id),
+    changeRequestId: str(r.change_request_id),
+    authorId: str(r.author_id),
+    content: str(r.content),
+    createdAt: str(r.created_at),
   };
 }

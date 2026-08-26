@@ -14,6 +14,7 @@ import { v4 as uuid } from "uuid";
 import {
   ChangeRequestStatus,
   MAX_ITEMS_PER_REQUEST,
+  Priority,
   type Attachment,
   type ChangeItem,
   type ChangeRequest,
@@ -115,6 +116,7 @@ export function makeChangeRequestService(
         websiteId,
         clientId,
         status: ChangeRequestStatus.Draft,
+        priority: Priority.Medium,
         createdAt: nowIso(),
         submittedAt: null,
       });

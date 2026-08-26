@@ -1,6 +1,5 @@
 /**
- * Repository aggregator. `makeRepositories(db)` builds every repository from a
- * single database handle so services receive one cohesive `Repositories` object.
+ * Repository aggregator.
  */
 import type { AppDatabase } from "../types.js";
 import { makeUserRepo } from "./userRepo.js";
@@ -8,6 +7,7 @@ import { makeProjectRepo } from "./projectRepo.js";
 import { makeWebsiteRepo } from "./websiteRepo.js";
 import { makeAssignmentRepo } from "./assignmentRepo.js";
 import { makeChangeRequestRepo } from "./changeRequestRepo.js";
+import { makeNoteRepo } from "./noteRepo.js";
 import {
   makeChangeItemRepo,
   makeComponentReferenceRepo,
@@ -17,11 +17,6 @@ import {
 
 export function makeRepositories(db: AppDatabase) {
   return {
-    /**
-     * Run `fn` inside a single SQLite transaction. Commits on success; rolls
-     * back and rethrows on any error so partial writes never survive
-     * (Req 11.7 atomic submit).
-     */
     transaction<T>(fn: () => T): T {
       db.exec("BEGIN");
       try {
@@ -46,6 +41,7 @@ export function makeRepositories(db: AppDatabase) {
     componentReferences: makeComponentReferenceRepo(db),
     screenshots: makeScreenshotRepo(db),
     attachments: makeAttachmentRepo(db),
+    notes: makeNoteRepo(db),
   };
 }
 
@@ -57,3 +53,4 @@ export * from "./websiteRepo.js";
 export * from "./assignmentRepo.js";
 export * from "./changeRequestRepo.js";
 export * from "./changeItemRepo.js";
+export * from "./noteRepo.js";

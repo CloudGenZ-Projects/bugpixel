@@ -1,7 +1,6 @@
 /**
- * Thin API client for the portal backend. All requests include credentials so
- * the HTTP-only session cookie is sent. Non-2xx responses throw an ApiClientError
- * carrying the backend's `{ error: { code, message, field? } }` body.
+ * Thin API client. All requests include credentials so the HTTP-only session
+ * cookie is sent. Non-2xx responses throw an ApiClientError.
  */
 import type { ApiError, ErrorCode } from "@crp/shared";
 
@@ -17,7 +16,6 @@ export class ApiClientError extends Error {
   }
 }
 
-/** Read a cookie value by name (for the double-submit CSRF token). */
 function readCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
   return match ? decodeURIComponent(match[1]) : null;
@@ -26,7 +24,6 @@ function readCookie(name: string): string | null {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  // Attach the CSRF token on state-changing requests (double-submit pattern).
   if (method !== "GET" && method !== "HEAD") {
     const csrf = readCookie("csrf");
     if (csrf) headers["X-CSRF-Token"] = csrf;
@@ -66,5 +63,6 @@ export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, body),
+  patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body),
   del: <T>(path: string) => request<T>("DELETE", path),
 };

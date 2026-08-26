@@ -1,13 +1,5 @@
 /**
- * Server entry point. Reads configuration from the environment, opens the
- * database, wires the container, and starts the HTTP server.
- *
- * Environment:
- *   PORT                     - listen port (default 3000)
- *   CRP_DB_PATH              - SQLite file path (default data/portal.db)
- *   CRP_STORAGE_ROOT         - blob storage root (default data/storage)
- *   CRP_INSPECTOR_SECRET     - inspector token signing secret (required in prod)
- *   NODE_ENV                 - "production" marks cookies Secure
+ * Server entry point with graceful shutdown.
  */
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -48,9 +40,31 @@ function main() {
       .filter(Boolean),
   });
 
-  app.listen(port, () => {
-    console.log(`Change Request Portal API listening on :${port}`);
+  const server = app.listen(port, () => {
+    console.log(`Change Request Portal listening on :${port}`);
   });
+
+  // --- Graceful shutdown ---------------------------------------------------
+  function shutdown(signal: string) {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+      try {
+        db.close();
+      } catch {
+        // ignore close errors
+      }
+      console.log("Server closed.");
+      process.exit(0);
+    });
+    // Force exit after 10s if connections hang
+    setTimeout(() => {
+      console.error("Forced shutdown after timeout.");
+      process.exit(1);
+    }, 10_000).unref();
+  }
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 main();

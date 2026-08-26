@@ -5,7 +5,7 @@
  * UUID strings and all timestamps are ISO-8601 text.
  */
 
-import type { ChangeRequestStatus, ChangeType, Role } from "./enums.js";
+import type { ChangeRequestStatus, ChangeType, Priority, Role } from "./enums.js";
 
 /** Any authenticated actor of the Portal. Holds exactly one role. */
 export interface User {
@@ -46,9 +46,12 @@ export interface ChangeRequest {
   websiteId: string;
   clientId: string;
   status: ChangeRequestStatus;
+  priority: Priority;
   createdAt: string;
   /** Set when the request is submitted; null/undefined while a Draft. */
   submittedAt?: string | null;
+  /** Optional due date for the change request. */
+  dueDate?: string | null;
 }
 
 /**
@@ -101,4 +104,13 @@ export interface Attachment {
   /** Restricted to PDF or image types. */
   mime: string;
   sizeBytes: number;
+}
+
+/** A comment/note on a change request (client<->developer conversation). */
+export interface Note {
+  id: string;
+  changeRequestId: string;
+  authorId: string;
+  content: string;
+  createdAt: string;
 }

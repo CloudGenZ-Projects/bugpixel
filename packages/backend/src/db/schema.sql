@@ -1,4 +1,4 @@
--- Change Request Portal — SQLite schema (DDL)
+-- Change Request Portal - SQLite schema (DDL)
 --
 -- Mirrors the design ERD. Conventions:
 --   * All primary keys are TEXT UUID strings.
@@ -6,11 +6,8 @@
 --   * Column names are snake_case here and map to the camelCase fields of the
 --     @crp/shared entity interfaces (e.g. owner_client_id <-> ownerClientId).
 --   * Foreign keys are enforced (PRAGMA foreign_keys = ON is set by createDb).
---
--- Requirements: 2.1 (single role per user), 14.3 (at most one active assignment
--- per project), 13.2 (developer removal cascades assignments).
 
--- user: any authenticated actor. Holds exactly one role (Requirement 2.1).
+-- user: any authenticated actor. Holds exactly one role.
 CREATE TABLE IF NOT EXISTS user (
   id            TEXT PRIMARY KEY,
   email         TEXT NOT NULL UNIQUE,
@@ -35,9 +32,8 @@ CREATE TABLE IF NOT EXISTS website (
 );
 
 -- assignment: an Admin-managed Developer <-> Project association.
--- UNIQUE(project_id) enforces at most one active assignment per Project (14.3).
--- ON DELETE CASCADE on developer_id removes assignments when a developer is
--- removed from the roster (13.2).
+-- UNIQUE(project_id) enforces at most one active assignment per Project.
+-- ON DELETE CASCADE on developer_id removes assignments when a developer is removed.
 CREATE TABLE IF NOT EXISTS assignment (
   id           TEXT PRIMARY KEY,
   project_id   TEXT NOT NULL UNIQUE REFERENCES project (id),
@@ -51,9 +47,13 @@ CREATE TABLE IF NOT EXISTS change_request (
   website_id   TEXT NOT NULL REFERENCES website (id),
   client_id    TEXT NOT NULL REFERENCES user (id),
   status       TEXT NOT NULL
-                 CHECK (status IN ('Draft', 'Submitted', 'AwaitingDeveloperAssignment')),
+                 CHECK (status IN ('Draft', 'Submitted', 'AwaitingDeveloperAssignment',
+                                   'InProgress', 'Done', 'Rejected')),
+  priority     TEXT NOT NULL DEFAULT 'Medium'
+                 CHECK (priority IN ('Critical', 'High', 'Medium', 'Low')),
   created_at   TEXT NOT NULL,
-  submitted_at TEXT
+  submitted_at TEXT,
+  due_date     TEXT
 );
 
 -- change_item: a single requested change; only the content columns relevant to
@@ -98,10 +98,21 @@ CREATE TABLE IF NOT EXISTS attachment (
   size_bytes     INTEGER NOT NULL
 );
 
--- Helpful indexes for the role-scoped listing queries used downstream.
+-- note: comments/conversation on a change request.
+CREATE TABLE IF NOT EXISTS note (
+  id                TEXT PRIMARY KEY,
+  change_request_id TEXT NOT NULL REFERENCES change_request (id) ON DELETE CASCADE,
+  author_id         TEXT NOT NULL REFERENCES user (id),
+  content           TEXT NOT NULL,
+  created_at        TEXT NOT NULL
+);
+
+-- Indexes for performance.
 CREATE INDEX IF NOT EXISTS idx_website_owner_client ON website (owner_client_id);
 CREATE INDEX IF NOT EXISTS idx_website_project ON website (project_id);
 CREATE INDEX IF NOT EXISTS idx_change_request_client ON change_request (client_id);
 CREATE INDEX IF NOT EXISTS idx_change_request_website ON change_request (website_id);
+CREATE INDEX IF NOT EXISTS idx_change_request_status ON change_request (status);
 CREATE INDEX IF NOT EXISTS idx_change_item_request ON change_item (change_request_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_developer ON assignment (developer_id);
+CREATE INDEX IF NOT EXISTS idx_note_request ON note (change_request_id);
