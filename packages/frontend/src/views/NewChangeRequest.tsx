@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChangeType, Priority } from "@crp/shared";
 import { endpoints } from "../api/endpoints.js";
+import { WebsiteOpenController } from "../inspector/WebsiteOpenController.js";
 
 interface ScreenshotPreview {
   data: string; // base64 data URL
@@ -31,6 +32,8 @@ export function NewChangeRequest() {
   const [contentUpdated, setContentUpdated] = useState("");
   const [contentDelete, setContentDelete] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [selector, setSelector] = useState<string | null>(null);
+  const [htmlMeta, setHtmlMeta] = useState<string | null>(null);
   const [screenshots, setScreenshots] = useState<ScreenshotPreview[]>([]);
 
   useEffect(() => {
@@ -48,34 +51,31 @@ export function NewChangeRequest() {
     if (!website) return;
 
     try {
-      const { token } = await endpoints.mintInspectorToken(websiteId);
-      // Open the inspector popup
-      const params = new URLSearchParams({ token, websiteId, origin: window.location.origin });
-      const popup = window.open(
-        `${website.url}?crp_inspect=1&${params.toString()}`,
-        "bugpixel-inspector",
-        "width=1200,height=800,scrollbars=yes"
-      );
-
-      // Listen for screenshot data from inspector
-      function onMessage(event: MessageEvent) {
-        if (event.data?.type === "crp-screenshot") {
-          const { dataUrl, width, height } = event.data;
-          setScreenshots((prev) => [...prev, { data: dataUrl, mime: "image/png", width, height }]);
-          window.removeEventListener("message", onMessage);
-        }
-      }
-      window.addEventListener("message", onMessage);
-
-      // Cleanup if popup closes without sending
-      if (popup) {
-        const check = setInterval(() => {
-          if (popup.closed) {
-            clearInterval(check);
-            window.removeEventListener("message", onMessage);
+      const controller = new WebsiteOpenController({
+        websiteId,
+        websiteUrl: website.url,
+        onCapture: (capture) => {
+          setScreenshots((prev) => [
+            ...prev,
+            {
+              data: capture.screenshot.dataUrl,
+              mime: capture.screenshot.mime,
+              width: capture.screenshot.width,
+              height: capture.screenshot.height,
+            },
+          ]);
+          if (capture.selector) setSelector(capture.selector);
+          if (capture.browserInfo || capture.htmlMeta) {
+            setHtmlMeta(
+              JSON.stringify({
+                ...capture.browserInfo,
+                html: capture.htmlMeta,
+              })
+            );
           }
-        }, 500);
-      }
+        },
+      });
+      await controller.open();
     } catch (e: any) {
       setError(e.message || "Failed to open inspector");
     }
@@ -105,6 +105,8 @@ export function NewChangeRequest() {
         contentUpdated: changeType === "Update" ? contentUpdated || null : null,
         contentDelete: changeType === "Delete" ? contentDelete || null : null,
         dueDate: dueDate || null,
+        selector: selector || undefined,
+        htmlMeta: htmlMeta || undefined,
       });
 
       // Upload screenshots

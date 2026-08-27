@@ -4,8 +4,8 @@
  * When CRP_R2_ACCOUNT_ID is set, uses Cloudflare R2 for blob storage.
  * Otherwise falls back to local filesystem.
  */
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import { createDb } from "./db/createDb.js";
 import { makeContainer } from "./container.js";
@@ -51,11 +51,22 @@ function main() {
     r2Config: r2Config ?? undefined,
   });
 
+  const defaultInspectorDir = resolve(process.cwd(), "packages/frontend/dist-inspector");
+  const fallbackInspectorDir = resolve(process.cwd(), "../frontend/dist-inspector");
+  const inspectorDir =
+    process.env.CRP_INSPECTOR_DIR ??
+    (existsSync(defaultInspectorDir)
+      ? defaultInspectorDir
+      : existsSync(fallbackInspectorDir)
+        ? fallbackInspectorDir
+        : undefined);
+
   const app = makeApp(container, {
     secureCookies: isProd,
     enforceHttps: isProd,
     spaDir: process.env.CRP_SPA_DIR,
-    inspectorDir: process.env.CRP_INSPECTOR_DIR,
+    inspectorDir,
+    storageRoot,
     allowedOrigins: (process.env.CRP_ALLOWED_ORIGINS ?? "")
       .split(",")
       .map((o) => o.trim())

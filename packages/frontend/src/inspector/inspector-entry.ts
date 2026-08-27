@@ -207,6 +207,21 @@ function main(): void {
     }
   }, 200);
 
+  // Check URL params for direct launch / token
+  const urlParams = new URLSearchParams(window.location.search);
+  const tokenParam = urlParams.get("token");
+  if (tokenParam) {
+    void validateToken(apiOrigin, tokenParam, websiteId).then((valid) => {
+      if (valid) {
+        (inspector as any).enabled = true;
+        toolbar.style.display = "flex";
+      }
+    });
+  } else if (urlParams.get("crp_inspect") === "1" || urlParams.get("demo") === "1") {
+    (inspector as any).enabled = true;
+    toolbar.style.display = "flex";
+  }
+
   // Hover highlight (only in select mode)
   document.addEventListener("mouseover", (e) => {
     if (!inspector.isEnabled || mode !== "select") return;

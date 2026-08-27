@@ -10,6 +10,7 @@ export default defineConfig({
     proxy: {
       "/api": { target: "http://localhost:3000", changeOrigin: true },
       "/inspector": { target: "http://localhost:3000", changeOrigin: true },
+      "/files": { target: "http://localhost:3000", changeOrigin: true },
     },
   },
   test: {
