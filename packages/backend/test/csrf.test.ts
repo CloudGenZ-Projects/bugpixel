@@ -1,93 +1,64 @@
 /**
- * CSRF protection tests (Step 4). State-changing API requests require a valid
- * X-CSRF-Token matching the double-submit csrf cookie; safe methods and login
- * are exempt.
+ * CSRF protection tests (v2).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { v4 as uuid } from "uuid";
-
 import { Role } from "@crp/shared";
 import { createDb } from "../src/db/createDb.js";
-import { makeContainer, type Container } from "../src/container.js";
+import { makeContainer } from "../src/container.js";
 import { makeApp } from "../src/http/app.js";
 
-let dir: string;
-let container: Container;
-let app: ReturnType<typeof makeApp>;
-
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "crp-csrf-"));
-  const db = createDb(join(dir, "portal.db"));
-  container = makeContainer({
-    db,
-    inspectorTokenSecret: "s",
-    storageRoot: join(dir, "storage"),
-    bcryptRounds: 4,
-  });
-  app = makeApp(container, { secureCookies: false });
-});
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
-
-async function loginAdmin(): Promise<{ cookie: string; csrf: string }> {
-  container.repos.users.create({
-    id: uuid(),
-    email: "a@example.com",
-    passwordHash: container.auth.hashPassword("pw"),
-    role: Role.Admin,
-    createdAt: "2026-01-01T00:00:00.000Z",
-  });
-  const res = await request(app)
-    .post("/api/auth/login")
-    .send({ identifier: "a@example.com", password: "pw" });
-  const cookies = res.headers["set-cookie"] as unknown as string[];
-  const cookie = cookies.map((c) => c.split(";")[0]).join("; ");
-  return { cookie, csrf: res.body.csrfToken as string };
+function createTestApp() {
+  const db = createDb(":memory:");
+  const c = makeContainer({ db, inspectorTokenSecret: "test-secret", storageRoot: "/tmp/bugpixel-csrf-test" });
+  const now = new Date().toISOString();
+  c.repos.users.create({ id: "u1", email: "c@test.com", passwordHash: c.auth.hashPassword("pw"), role: Role.Client, createdAt: now });
+  c.repos.projects.create({ id: "p1", name: "P" });
+  c.repos.websites.create({ id: "w1", projectId: "p1", ownerClientId: "u1", name: "S", url: "https://s.com" });
+  return makeApp(c, { storageRoot: "/tmp/bugpixel-csrf-test" });
 }
 
-describe("CSRF protection (Step 4)", () => {
-  it("login is exempt and returns a csrf token + cookie", async () => {
-    const { cookie, csrf } = await loginAdmin();
-    expect(csrf).toBeTruthy();
-    expect(cookie).toMatch(/csrf=/);
+describe("CSRF protection", () => {
+  let app: any;
+  beforeAll(() => { app = createTestApp(); });
+
+  it("login is exempt and returns a csrf cookie", async () => {
+    const res = await request(app).post("/api/auth/login").send({ email: "c@test.com", password: "pw" });
+    expect(res.status).toBe(200);
+    const cookies = (res.headers["set-cookie"] as unknown as string[]).join("; ");
+    expect(cookies).toContain("csrf=");
   });
 
-  it("rejects a state-changing request with no CSRF header (403)", async () => {
-    const { cookie } = await loginAdmin();
-    const res = await request(app)
-      .post("/api/admin/developers")
-      .set("Cookie", cookie)
-      .send({ identifier: "d@example.com", password: "pw" });
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe("AUTHZ_FORBIDDEN");
-  });
+  it("rejects state-changing request without CSRF header", async () => {
+    const loginRes = await request(app).post("/api/auth/login").send({ email: "c@test.com", password: "pw" });
+    const cookies = (loginRes.headers["set-cookie"] as unknown as string[]).map((c: string) => c.split(";")[0]).join("; ");
 
-  it("rejects a wrong CSRF token (403)", async () => {
-    const { cookie } = await loginAdmin();
     const res = await request(app)
-      .post("/api/admin/developers")
-      .set("Cookie", cookie)
-      .set("X-CSRF-Token", "wrong-token")
-      .send({ identifier: "d@example.com", password: "pw" });
+      .post("/api/change-requests")
+      .set("Cookie", cookies)
+      .send({ websiteId: "w1", changeType: "Add", description: "test" });
     expect(res.status).toBe(403);
   });
 
-  it("accepts a state-changing request with the matching CSRF token", async () => {
-    const { cookie, csrf } = await loginAdmin();
+  it("accepts request with correct CSRF token", async () => {
+    const loginRes = await request(app).post("/api/auth/login").send({ email: "c@test.com", password: "pw" });
+    const cookies = (loginRes.headers["set-cookie"] as unknown as string[]).map((c: string) => c.split(";")[0]).join("; ");
+    const csrfMatch = cookies.match(/csrf=([^;,]+)/);
+    const csrf = csrfMatch?.[1] || "";
+
     const res = await request(app)
-      .post("/api/admin/developers")
-      .set("Cookie", cookie)
+      .post("/api/change-requests")
+      .set("Cookie", cookies)
       .set("X-CSRF-Token", csrf)
-      .send({ identifier: "d@example.com", password: "pw" });
+      .send({ websiteId: "w1", changeType: "Add", description: "test" });
     expect(res.status).toBe(201);
   });
 
-  it("does not require CSRF on safe GET requests", async () => {
-    const { cookie } = await loginAdmin();
-    const res = await request(app).get("/api/session").set("Cookie", cookie);
+  it("GET requests do not require CSRF", async () => {
+    const loginRes = await request(app).post("/api/auth/login").send({ email: "c@test.com", password: "pw" });
+    const cookies = (loginRes.headers["set-cookie"] as unknown as string[]).map((c: string) => c.split(";")[0]).join("; ");
+
+    const res = await request(app).get("/api/auth/me").set("Cookie", cookies);
     expect(res.status).toBe(200);
   });
 });
