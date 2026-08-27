@@ -1,145 +1,121 @@
 /**
- * Typed endpoint wrappers over the API client.
+ * BugPixel v2 API endpoints.
  */
-import type { ChangeRequest, ChangeItem, Role, Website, Assignment, Note } from "@crp/shared";
+import type { ChangeRequest, ChangeRequestStatus, Priority, Screenshot, Attachment, Note } from "@crp/shared";
 import { api } from "./client.js";
 
-export interface SessionUser {
-  id: string;
-  email: string;
-  role: Role;
-}
-
 export interface SessionResponse {
-  user: SessionUser;
+  user: { id: string; email: string; role: string };
   view: "client" | "developer" | "admin";
 }
 
-export interface ChangeItemDetail {
-  item: ChangeItem;
-  componentReference: {
-    id: string;
-    selector: string | null;
-    htmlMeta: string | null;
-  } | null;
-  screenshot: {
-    id: string;
-    storageKey: string;
-    mime: string;
-    width: number;
-    height: number;
-  } | null;
-  attachments: Array<{ id: string; filename: string; mime: string; sizeBytes: number; storageKey: string }>;
-}
-
-export interface ChangeRequestDetail {
-  request: ChangeRequest;
-  items: ChangeItemDetail[];
-}
-
-export interface AddItemBody {
+export interface CreateChangeRequestInput {
+  websiteId: string;
   changeType: string;
   description: string;
+  priority?: string;
   contentAdd?: string | null;
   contentCurrent?: string | null;
   contentUpdated?: string | null;
   contentDelete?: string | null;
-  component: { selector: string | null; htmlMeta: string | null };
-  screenshot: { storageKey: string; mime: string; width: number; height: number };
+  selector?: string | null;
+  htmlMeta?: string | null;
+  dueDate?: string | null;
 }
 
-export interface EnrichedNote extends Note {
-  authorEmail: string;
-}
-
-export interface MonthlyStats {
-  month: string;
-  submitted: number;
-  done: number;
-  rejected: number;
-  inProgress: number;
+export interface ChangeRequestDetailResponse {
+  request: ChangeRequest;
+  screenshots: Screenshot[];
+  attachments: Attachment[];
+  notes: Note[];
+  activity: { id: string; actorId: string; action: string; detail: string | null; createdAt: string }[];
 }
 
 export const endpoints = {
-  login: (identifier: string, password: string) =>
-    api.post<{ user: SessionUser }>("/api/auth/login", { identifier, password }),
-  logout: () => api.post<{ ok: true }>("/api/auth/logout"),
-  session: () => api.get<SessionResponse>("/api/session"),
+  // Auth
+  async login(email: string, password: string) {
+    return api.post<{ user: { id: string; email: string; role: string }; csrfToken: string }>("/api/auth/login", { email, password });
+  },
+  async logout() {
+    return api.post<{ ok: boolean }>("/api/auth/logout", {});
+  },
+  async session(): Promise<SessionResponse> {
+    const res = await api.get<{ user: { id: string; email: string; role: string } }>("/api/auth/me");
+    const role = res.user.role.toLowerCase() as "client" | "developer" | "admin";
+    return { user: res.user, view: role };
+  },
 
-  websites: () => api.get<{ websites: Website[] }>("/api/websites"),
+  // Change Requests
+  async createChangeRequest(input: CreateChangeRequestInput) {
+    return api.post<{ changeRequest: ChangeRequest }>("/api/change-requests", input);
+  },
+  async listChangeRequests() {
+    return api.get<{ changeRequests: ChangeRequest[] }>("/api/change-requests");
+  },
+  async getChangeRequestDetail(id: string) {
+    return api.get<ChangeRequestDetailResponse>(`/api/change-requests/${id}`);
+  },
+  async updateStatus(id: string, status: ChangeRequestStatus) {
+    return api.patch<{ changeRequest: ChangeRequest }>(`/api/change-requests/${id}/status`, { status });
+  },
+  async updatePriority(id: string, priority: Priority) {
+    return api.patch<{ ok: boolean }>(`/api/change-requests/${id}/priority`, { priority });
+  },
+  async uploadScreenshot(id: string, data: string, mime: string, width: number, height: number) {
+    return api.post<{ screenshot: Screenshot }>(`/api/change-requests/${id}/screenshots`, { data, mime, width, height });
+  },
+  async uploadAttachment(id: string, data: string, mime: string, filename: string) {
+    return api.post<{ attachment: Attachment }>(`/api/change-requests/${id}/attachments`, { data, mime, filename });
+  },
+  async addNote(id: string, content: string, imageData?: string, imageMime?: string) {
+    return api.post<{ note: Note }>(`/api/change-requests/${id}/notes`, { content, imageData, imageMime });
+  },
+  async getActivity(id: string) {
+    return api.get<{ activity: any[] }>(`/api/change-requests/${id}/activity`);
+  },
 
-  mintInspectorToken: (websiteId: string) =>
-    api.post<{ token: string; expiresIn: number }>("/api/inspector/token", { websiteId }),
+  // Projects
+  async listProjects() {
+    return api.get<{ projects: { id: string; name: string }[] }>("/api/projects");
+  },
+  async listProjectChangeRequests(projectId: string) {
+    return api.get<{ changeRequests: (ChangeRequest & { screenshots: Screenshot[] })[] }>(`/api/projects/${projectId}/change-requests`);
+  },
 
-  createChangeRequest: (websiteId: string, priority?: string) =>
-    api.post<{ changeRequest: ChangeRequest }>("/api/change-requests", { websiteId, priority }),
-  addItem: (requestId: string, body: AddItemBody) =>
-    api.post<{ item: ChangeItem }>(`/api/change-requests/${requestId}/items`, body),
-  uploadScreenshot: (requestId: string, dataBase64: string, mime: string) =>
-    api.post<{ storageKey: string }>(`/api/change-requests/${requestId}/screenshots`, {
-      dataBase64,
-      mime,
-    }),
-  uploadAttachment: (
-    requestId: string,
-    itemId: string,
-    dataBase64: string,
-    mime: string,
-    filename: string
-  ) =>
-    api.post<{
-      attachment: { id: string; filename: string; mime: string; sizeBytes: number };
-    }>(`/api/change-requests/${requestId}/items/${itemId}/attachments`, {
-      dataBase64,
-      mime,
-      filename,
-    }),
-  submit: (requestId: string) =>
-    api.post<{ changeRequest: ChangeRequest }>(
-      `/api/change-requests/${requestId}/submit`
-    ),
-
-  // Status transitions (developer/admin)
-  updateStatus: (requestId: string, status: string) =>
-    api.patch<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/status`, { status }),
-
-  // Priority update
-  updatePriority: (requestId: string, priority: string) =>
-    api.patch<{ changeRequest: ChangeRequest }>(`/api/change-requests/${requestId}/priority`, { priority }),
-
-  listChangeRequests: () =>
-    api.get<{ changeRequests: ChangeRequest[] }>("/api/change-requests"),
-  changeRequestDetail: (id: string) =>
-    api.get<ChangeRequestDetail>(`/api/change-requests/${id}`),
-
-  // Notes
-  listNotes: (requestId: string) =>
-    api.get<{ notes: EnrichedNote[] }>(`/api/change-requests/${requestId}/notes`),
-  addNote: (requestId: string, content: string) =>
-    api.post<{ note: EnrichedNote }>(`/api/change-requests/${requestId}/notes`, { content }),
+  // Websites
+  async listWebsites() {
+    return api.get<{ websites: { id: string; projectId: string; ownerClientId: string; name: string; url: string }[] }>("/api/websites");
+  },
 
   // Analytics
-  monthlyStats: (months?: number) =>
-    api.get<{ stats: MonthlyStats[] }>(`/api/analytics/monthly${months ? `?months=${months}` : ""}`),
-  summaryStats: () =>
-    api.get<{ counts: Record<string, number> }>("/api/analytics/summary"),
+  async getAnalytics(projectId?: string) {
+    return api.get<{ statusCounts: Record<string, number>; monthlyStats: any[]; avgResolutionHours: number | null }>(
+      `/api/analytics/stats${projectId ? `?projectId=${projectId}` : ""}`
+    );
+  },
 
-  // File serving (screenshots/attachments)
-  fileUrl: (storageKey: string) => `/api/files/${storageKey}`,
+  // Inspector
+  async mintInspectorToken(websiteId: string) {
+    return api.post<{ token: string; expiresIn: number }>("/api/inspector/token", { websiteId });
+  },
 
   // Admin
-  listDevelopers: () => api.get<{ developers: SessionUser[] }>("/api/admin/developers"),
-  addDeveloper: (identifier: string, password: string) =>
-    api.post<{ developer: SessionUser }>("/api/admin/developers", {
-      identifier,
-      password,
-    }),
-  removeDeveloper: (id: string) => api.del<{ ok: true }>(`/api/admin/developers/${id}`),
-  listAssignments: () => api.get<{ assignments: Assignment[] }>("/api/admin/assignments"),
-  setAssignment: (projectId: string, developerId: string) =>
-    api.put<{ assignment: Assignment }>(`/api/admin/projects/${projectId}/assignment`, {
-      developerId,
-    }),
-  removeAssignment: (projectId: string) =>
-    api.del<{ ok: true }>(`/api/admin/projects/${projectId}/assignment`),
+  async listUsers() {
+    return api.get<{ users: { id: string; email: string; role: string; createdAt: string }[] }>("/api/admin/users");
+  },
+  async createUser(email: string, password: string, role: string) {
+    return api.post<{ user: { id: string; email: string; role: string } }>("/api/admin/users", { email, password, role });
+  },
+  async createProject(name: string) {
+    return api.post<{ project: { id: string; name: string } }>("/api/admin/projects", { name });
+  },
+  async createWebsite(projectId: string, ownerClientId: string, name: string, url: string) {
+    return api.post<{ website: any }>("/api/admin/websites", { projectId, ownerClientId, name, url });
+  },
+  async createAssignment(projectId: string, developerId: string) {
+    return api.post<{ assignment: any }>("/api/admin/assignments", { projectId, developerId });
+  },
+  async deleteWebsite(id: string) {
+    return api.del<{ ok: boolean }>(`/api/admin/websites/${id}`);
+  },
 };

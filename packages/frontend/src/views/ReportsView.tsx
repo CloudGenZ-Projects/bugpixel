@@ -1,110 +1,132 @@
 /**
- * Reports view: monthly stats, summary cards, and status breakdown.
+ * Reports page - per-project stats, status distribution, avg resolution time.
  */
 import { useEffect, useState } from "react";
 import { endpoints } from "../api/endpoints.js";
 
-interface MonthlyStats {
-  month: string;
-  submitted: number;
-  done: number;
-  rejected: number;
-  inProgress: number;
-}
-
 export function ReportsView() {
-  const [monthly, setMonthly] = useState<MonthlyStats[]>([]);
-  const [summary, setSummary] = useState<Record<string, number>>({});
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [selectedProject, setSelectedProject] = useState<string>("");
+  const [stats, setStats] = useState<{
+    statusCounts: Record<string, number>;
+    monthlyStats: { month: string; submitted: number; done: number; cancelled: number; inProgress: number }[];
+    avgResolutionHours: number | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([endpoints.monthlyStats(), endpoints.summaryStats()]).then(
-      ([m, s]) => {
-        setMonthly(m.stats);
-        setSummary(s.counts);
-        setLoading(false);
-      }
-    );
+    endpoints.listProjects().then((r) => {
+      setProjects(r.projects);
+      setLoading(false);
+    });
   }, []);
 
-  if (loading) return <div className="text-gray-500 animate-pulse">Loading reports...</div>;
+  useEffect(() => {
+    endpoints.getAnalytics(selectedProject || undefined).then((r) => setStats(r));
+  }, [selectedProject]);
 
-  const total = Object.values(summary).reduce((a, b) => a + b, 0);
-  const done = summary["Done"] ?? 0;
-  const closureRate = total > 0 ? Math.round((done / total) * 100) : 0;
+  if (loading) return <div className="text-center py-12 text-gray-500">Loading...</div>;
+
+  const total = stats ? Object.values(stats.statusCounts).reduce((a, b) => a + b, 0) : 0;
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Reports & Analytics</h1>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <SummaryCard label="Total Requests" value={total} color="text-gray-900" />
-        <SummaryCard label="In Progress" value={summary["InProgress"] ?? 0} color="text-yellow-600" />
-        <SummaryCard label="Completed" value={done} color="text-green-600" />
-        <SummaryCard label="Closure Rate" value={`${closureRate}%`} color="text-primary" />
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+        <select
+          value={selectedProject}
+          onChange={(e) => setSelectedProject(e.target.value)}
+          className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white"
+        >
+          <option value="">All Projects</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
       </div>
 
-      {/* Status breakdown */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">Status Breakdown</h2>
-        <div className="space-y-3">
-          {Object.entries(summary).map(([status, count]) => (
-            <div key={status} className="flex items-center gap-3">
-              <span className="text-sm text-gray-600 w-48">{status}</span>
-              <div className="flex-1 h-6 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary rounded-full transition-all"
-                  style={{ width: total > 0 ? `${(count / total) * 100}%` : "0%" }}
-                />
+      {!stats ? (
+        <p className="text-center py-8 text-gray-500">Loading stats...</p>
+      ) : (
+        <div className="space-y-6">
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <StatCard label="Total" value={total} color="bg-gray-900" />
+            <StatCard label="Submitted" value={stats.statusCounts.Submitted || 0} color="bg-blue-600" />
+            <StatCard label="In Progress" value={stats.statusCounts.InProgress || 0} color="bg-amber-500" />
+            <StatCard label="Done" value={stats.statusCounts.Done || 0} color="bg-green-600" />
+          </div>
+
+          {/* Resolution time */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Average Resolution Time</h3>
+            <p className="text-3xl font-bold text-gray-900">
+              {stats.avgResolutionHours != null ? `${stats.avgResolutionHours}h` : "—"}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">From Submitted to Done</p>
+          </div>
+
+          {/* Monthly trend */}
+          {stats.monthlyStats.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Monthly Activity</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                      <th className="py-2 pr-4">Month</th>
+                      <th className="py-2 pr-4">Submitted</th>
+                      <th className="py-2 pr-4">Done</th>
+                      <th className="py-2 pr-4">In Progress</th>
+                      <th className="py-2">Cancelled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.monthlyStats.map((m) => (
+                      <tr key={m.month} className="border-b border-gray-50">
+                        <td className="py-2 pr-4 font-medium text-gray-900">{m.month}</td>
+                        <td className="py-2 pr-4 text-blue-600">{m.submitted}</td>
+                        <td className="py-2 pr-4 text-green-600">{m.done}</td>
+                        <td className="py-2 pr-4 text-amber-600">{m.inProgress}</td>
+                        <td className="py-2 text-gray-500">{m.cancelled}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <span className="text-sm font-medium text-gray-700 w-12 text-right">{count}</span>
             </div>
-          ))}
-        </div>
-      </div>
+          )}
 
-      {/* Monthly table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-800">Monthly Activity</h2>
+          {/* Status distribution */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Status Distribution</h3>
+            {total > 0 ? (
+              <div className="flex h-4 rounded-full overflow-hidden">
+                {(stats.statusCounts.Submitted || 0) > 0 && <div className="bg-blue-500" style={{ width: `${((stats.statusCounts.Submitted || 0) / total) * 100}%` }} />}
+                {(stats.statusCounts.InProgress || 0) > 0 && <div className="bg-amber-500" style={{ width: `${((stats.statusCounts.InProgress || 0) / total) * 100}%` }} />}
+                {(stats.statusCounts.Done || 0) > 0 && <div className="bg-green-500" style={{ width: `${((stats.statusCounts.Done || 0) / total) * 100}%` }} />}
+                {(stats.statusCounts.Cancelled || 0) > 0 && <div className="bg-gray-400" style={{ width: `${((stats.statusCounts.Cancelled || 0) / total) * 100}%` }} />}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400 italic">No data</p>
+            )}
+            <div className="flex gap-4 mt-2 text-xs text-gray-500">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Submitted</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />In Progress</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />Done</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" />Cancelled</span>
+            </div>
+          </div>
         </div>
-        {monthly.length === 0 ? (
-          <p className="p-6 text-gray-500 text-center">No data yet. Submit some requests!</p>
-        ) : (
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Month</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Submitted</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">In Progress</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Done</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Rejected</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {monthly.map((row) => (
-                <tr key={row.month} className="hover:bg-gray-50">
-                  <td className="px-6 py-3 text-sm text-gray-800 font-medium">{row.month}</td>
-                  <td className="px-6 py-3 text-sm text-right text-gray-600">{row.submitted}</td>
-                  <td className="px-6 py-3 text-sm text-right text-yellow-600">{row.inProgress}</td>
-                  <td className="px-6 py-3 text-sm text-right text-green-600">{row.done}</td>
-                  <td className="px-6 py-3 text-sm text-right text-red-600">{row.rejected}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      )}
     </div>
   );
 }
 
-function SummaryCard({ label, value, color }: { label: string; value: number | string; color: string }) {
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${color}`}>{value}</p>
+      <p className="text-xs text-gray-500 mb-1">{label}</p>
+      <p className="text-2xl font-bold text-gray-900">{value}</p>
+      <div className={`h-1 w-8 rounded-full mt-2 ${color}`} />
     </div>
   );
 }

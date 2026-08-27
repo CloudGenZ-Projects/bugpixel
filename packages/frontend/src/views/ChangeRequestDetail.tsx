@@ -1,213 +1,215 @@
 /**
- * Change request detail: shows items with screenshots, notes section, and
- * status controls.
+ * Change Request Detail page (v2) - status controls, gallery, metadata, activity, notes.
  */
 import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-
-import { endpoints, type ChangeRequestDetail as Detail, type EnrichedNote } from "../api/endpoints.js";
+import { useParams, useNavigate } from "react-router-dom";
+import { ChangeRequestStatus, Priority } from "@crp/shared";
+import type { ChangeRequest, Screenshot, Attachment, Note } from "@crp/shared";
+import { endpoints, type ChangeRequestDetailResponse } from "../api/endpoints.js";
 import { useSession } from "../auth/SessionContext.js";
+import { ImageLightbox } from "./ImageLightbox.js";
 
-const STATUS_STYLES: Record<string, string> = {
-  Draft: "bg-gray-100 text-gray-700",
-  Submitted: "bg-blue-100 text-blue-700",
-  AwaitingDeveloperAssignment: "bg-purple-100 text-purple-700",
-  InProgress: "bg-yellow-100 text-yellow-700",
-  Done: "bg-green-100 text-green-700",
-  Rejected: "bg-red-100 text-red-700",
+const STATUS_BADGE: Record<string, string> = {
+  Submitted: "bg-blue-100 text-blue-800",
+  InProgress: "bg-amber-100 text-amber-800",
+  Done: "bg-green-100 text-green-800",
+  Cancelled: "bg-gray-100 text-gray-600",
 };
 
 export function ChangeRequestDetail() {
   const { id } = useParams<{ id: string }>();
   const { session } = useSession();
-  const [detail, setDetail] = useState<Detail | null>(null);
-  const [notes, setNotes] = useState<EnrichedNote[]>([]);
+  const navigate = useNavigate();
+  const [detail, setDetail] = useState<ChangeRequestDetailResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [noteSending, setNoteSending] = useState(false);
 
-  useEffect(() => {
+  async function load() {
     if (!id) return;
-    endpoints
-      .changeRequestDetail(id)
-      .then(setDetail)
-      .catch(() => setError("Unable to load this change request."));
-    endpoints.listNotes(id).then((r) => setNotes(r.notes));
-  }, [id]);
-
-  async function postNote() {
-    if (!id || !noteText.trim()) return;
-    const { note } = await endpoints.addNote(id, noteText);
-    setNotes((prev) => [...prev, note]);
-    setNoteText("");
+    setLoading(true);
+    const d = await endpoints.getChangeRequestDetail(id);
+    setDetail(d);
+    setLoading(false);
   }
 
-  if (error) return <div className="text-center py-8"><p className="text-red-600">{error}</p></div>;
-  if (!detail) return <div className="text-gray-500 animate-pulse py-8">Loading...</div>;
+  useEffect(() => { load(); }, [id]);
 
-  const { request, items } = detail;
+  if (loading || !detail) return <div className="text-center py-12 text-gray-500">Loading...</div>;
+
+  const { request: cr, screenshots, attachments, notes, activity } = detail;
+  const role = session?.user.role;
+
+  function fileUrl(key: string) {
+    return `/files/${key.slice(0, 2)}/${key.slice(2, 4)}/${key}`;
+  }
+
+  async function changeStatus(newStatus: ChangeRequestStatus) {
+    await endpoints.updateStatus(cr.id, newStatus);
+    load();
+  }
+
+  async function sendNote() {
+    if (!noteText.trim()) return;
+    setNoteSending(true);
+    await endpoints.addNote(cr.id, noteText.trim());
+    setNoteText("");
+    setNoteSending(false);
+    load();
+  }
+
+  // Parse htmlMeta
+  let meta: Record<string, string> = {};
+  if (cr.htmlMeta) {
+    try { meta = JSON.parse(cr.htmlMeta); } catch {}
+  }
 
   return (
-    <div className="max-w-4xl">
-      <Link to="/" className="text-sm text-primary hover:text-primary-hover mb-4 inline-block">
-        ← Back to dashboard
-      </Link>
-
+    <div className="max-w-4xl mx-auto">
       {/* Header */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-xl font-bold text-gray-900">
-            Request #{request.id.slice(0, 8)}
-          </h1>
-          <div className="flex items-center gap-2">
-            <a
-              href={`/api/change-requests/${request.id}/export`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
-            >
-              📄 Export
-            </a>
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${STATUS_STYLES[request.status] ?? ""}`}>
-              {request.status}
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <button onClick={() => navigate(-1)} className="text-sm text-gray-500 hover:text-gray-700 mb-2">← Back</button>
+          <h1 className="text-xl font-bold text-gray-900 line-clamp-2">{cr.description}</h1>
+          <div className="flex items-center gap-3 mt-2">
+            <span className={`px-3 py-1 text-sm font-medium rounded-full ${STATUS_BADGE[cr.status]}`}>
+              {cr.status}
             </span>
+            <span className="text-sm text-gray-500">{cr.changeType}</span>
+            <span className="text-sm text-gray-500">{cr.priority}</span>
+            <span className="text-sm text-gray-400">{new Date(cr.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
-        <div className="flex items-center gap-4 text-sm text-gray-500">
-          <span>Priority: <strong className="text-gray-700">{request.priority}</strong></span>
-          <span>Submitted: {request.submittedAt ? new Date(request.submittedAt).toLocaleString() : "—"}</span>
-          {request.dueDate && <span>Due: {new Date(request.dueDate).toLocaleDateString()}</span>}
-          <span>Items: <strong>{items.length}</strong></span>
+
+        {/* Status actions */}
+        <div className="flex gap-2">
+          {cr.status === "Submitted" && (role === "Developer" || role === "Admin") && (
+            <button onClick={() => changeStatus(ChangeRequestStatus.InProgress)} className="px-3 py-1.5 bg-amber-500 text-white text-sm rounded-lg hover:bg-amber-600">Start</button>
+          )}
+          {cr.status === "InProgress" && (role === "Developer" || role === "Admin") && (
+            <button onClick={() => changeStatus(ChangeRequestStatus.Done)} className="px-3 py-1.5 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600">Done</button>
+          )}
+          {cr.status !== "Cancelled" && cr.status !== "Done" && (
+            <button onClick={() => changeStatus(ChangeRequestStatus.Cancelled)} className="px-3 py-1.5 bg-gray-200 text-gray-700 text-sm rounded-lg hover:bg-gray-300">Cancel</button>
+          )}
         </div>
       </div>
 
-      {/* Change items */}
-      <div className="space-y-4 mb-8">
-        {items.map(({ item, componentReference, screenshot, attachments }, idx) => (
-          <div key={item.id} className="bg-white rounded-xl border border-gray-200 p-5">
-            <div className="flex items-center gap-3 mb-3">
-              <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-                #{idx + 1}
-              </span>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                item.changeType === "Add" ? "bg-green-100 text-green-700" :
-                item.changeType === "Delete" ? "bg-red-100 text-red-700" :
-                "bg-blue-100 text-blue-700"
-              }`}>
-                {item.changeType}
-              </span>
-              {componentReference?.selector && (
-                <code className="text-xs bg-gray-50 text-gray-500 px-2 py-0.5 rounded">
-                  {componentReference.selector}
-                </code>
-              )}
-            </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Main content */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Content fields */}
+          {(cr.contentAdd || cr.contentCurrent || cr.contentUpdated || cr.contentDelete) && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Content Details</h3>
+              {cr.contentAdd && <div className="mb-2"><span className="text-xs font-medium text-green-700 bg-green-50 px-2 py-0.5 rounded">Add</span><p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">{cr.contentAdd}</p></div>}
+              {cr.contentCurrent && <div className="mb-2"><span className="text-xs font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">Current</span><p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">{cr.contentCurrent}</p></div>}
+              {cr.contentUpdated && <div className="mb-2"><span className="text-xs font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded">Updated</span><p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">{cr.contentUpdated}</p></div>}
+              {cr.contentDelete && <div className="mb-2"><span className="text-xs font-medium text-red-700 bg-red-50 px-2 py-0.5 rounded">Delete</span><p className="mt-1 text-sm text-gray-800 whitespace-pre-wrap">{cr.contentDelete}</p></div>}
+            </section>
+          )}
 
-            <p className="text-gray-800 mb-3">{item.description}</p>
-
-            {/* Type-specific content */}
-            {item.contentAdd && (
-              <div className="bg-green-50 border border-green-100 rounded-lg p-3 mb-3">
-                <span className="text-xs text-green-600 font-medium">Content to add:</span>
-                <p className="text-sm text-green-800 mt-1">{item.contentAdd}</p>
-              </div>
-            )}
-            {item.contentCurrent && (
-              <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-3">
-                <span className="text-xs text-gray-500 font-medium">Current:</span>
-                <p className="text-sm text-gray-700 mt-1">{item.contentCurrent}</p>
-              </div>
-            )}
-            {item.contentUpdated && (
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-3">
-                <span className="text-xs text-blue-600 font-medium">Updated:</span>
-                <p className="text-sm text-blue-800 mt-1">{item.contentUpdated}</p>
-              </div>
-            )}
-            {item.contentDelete && (
-              <div className="bg-red-50 border border-red-100 rounded-lg p-3 mb-3">
-                <span className="text-xs text-red-600 font-medium">To remove:</span>
-                <p className="text-sm text-red-800 mt-1">{item.contentDelete}</p>
-              </div>
-            )}
-
-            {/* Screenshot */}
-            {screenshot && (
-              <div className="mt-3">
-                <img
-                  src={endpoints.fileUrl(screenshot.storageKey)}
-                  alt="Screenshot"
-                  className="rounded-lg border border-gray-200 max-h-64 object-contain"
-                />
-              </div>
-            )}
-
-            {/* Attachments */}
-            {attachments.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {attachments.map((a) => (
-                  <a
-                    key={a.id}
-                    href={endpoints.fileUrl(a.storageKey)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-100"
-                  >
-                    📎 {a.filename} ({(a.sizeBytes / 1024).toFixed(0)} KB)
-                  </a>
+          {/* Screenshots gallery */}
+          {screenshots.length > 0 && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Screenshots ({screenshots.length})</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {screenshots.map((s) => (
+                  <img
+                    key={s.id}
+                    src={fileUrl(s.storageKey)}
+                    alt="Screenshot"
+                    className="rounded-lg border border-gray-200 cursor-zoom-in hover:shadow-md transition-shadow object-cover aspect-video"
+                    onClick={() => setLightbox(fileUrl(s.storageKey))}
+                  />
                 ))}
               </div>
-            )}
-          </div>
-        ))}
-      </div>
+            </section>
+          )}
 
-      {/* Notes / Comments */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">Notes & Discussion</h2>
-
-        {notes.length === 0 && (
-          <p className="text-sm text-gray-400 mb-4">No notes yet. Start the conversation.</p>
-        )}
-
-        <div className="space-y-3 mb-4">
-          {notes.map((note) => (
-            <div key={note.id} className="flex gap-3">
-              <div className="w-8 h-8 rounded-full bg-primary-light flex items-center justify-center text-xs font-bold text-primary shrink-0">
-                {note.authorEmail[0].toUpperCase()}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-gray-800">{note.authorEmail}</span>
-                  <span className="text-xs text-gray-400">
-                    {new Date(note.createdAt).toLocaleString()}
-                  </span>
+          {/* Notes */}
+          <section className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Notes ({notes.length})</h3>
+            {notes.length === 0 && <p className="text-sm text-gray-400 italic">No notes yet.</p>}
+            <div className="space-y-3 mb-4">
+              {notes.map((n) => (
+                <div key={n.id} className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-sm text-gray-800">{n.content}</p>
+                  {n.imageStorageKey && (
+                    <img src={fileUrl(n.imageStorageKey)} alt="Note image" className="mt-2 max-w-[200px] rounded cursor-zoom-in" onClick={() => setLightbox(fileUrl(n.imageStorageKey!))} />
+                  )}
+                  <p className="text-xs text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString()}</p>
                 </div>
-                <p className="text-sm text-gray-600 mt-0.5">{note.content}</p>
-              </div>
+              ))}
             </div>
-          ))}
+            <div className="flex gap-2">
+              <input
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                placeholder="Add a note..."
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendNote(); } }}
+              />
+              <button onClick={sendNote} disabled={noteSending || !noteText.trim()} className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-hover disabled:opacity-50">Send</button>
+            </div>
+          </section>
         </div>
 
-        {session && (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && postNote()}
-              placeholder="Add a note..."
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-            />
-            <button
-              onClick={postNote}
-              disabled={!noteText.trim()}
-              className="px-4 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-hover disabled:opacity-50"
-            >
-              Send
-            </button>
-          </div>
-        )}
+        {/* Sidebar */}
+        <div className="space-y-6">
+          {/* Metadata panel */}
+          {Object.keys(meta).length > 0 && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Browser Info</h3>
+              <dl className="space-y-2 text-xs">
+                {meta.browser && <div><dt className="text-gray-500">Browser</dt><dd className="text-gray-900">{meta.browser}</dd></div>}
+                {meta.os && <div><dt className="text-gray-500">OS</dt><dd className="text-gray-900">{meta.os}</dd></div>}
+                {meta.viewport && <div><dt className="text-gray-500">Viewport</dt><dd className="text-gray-900">{meta.viewport}</dd></div>}
+                {meta.screen && <div><dt className="text-gray-500">Screen</dt><dd className="text-gray-900">{meta.screen}</dd></div>}
+                {meta.url && <div><dt className="text-gray-500">URL</dt><dd className="text-gray-900 break-all">{meta.url}</dd></div>}
+                {meta.devicePixelRatio && <div><dt className="text-gray-500">DPR</dt><dd className="text-gray-900">{meta.devicePixelRatio}</dd></div>}
+              </dl>
+            </section>
+          )}
+
+          {/* Selector */}
+          {cr.selector && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Element Selector</h3>
+              <code className="text-xs bg-gray-100 p-2 rounded block break-all">{cr.selector}</code>
+            </section>
+          )}
+
+          {/* Activity timeline */}
+          <section className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Activity</h3>
+            {activity.length === 0 && <p className="text-sm text-gray-400 italic">No activity.</p>}
+            <div className="space-y-3">
+              {activity.map((a) => (
+                <div key={a.id} className="flex gap-2 text-xs">
+                  <div className="w-2 h-2 rounded-full bg-gray-300 mt-1.5 shrink-0" />
+                  <div>
+                    <span className="font-medium text-gray-700">{a.action}</span>
+                    {a.detail && <span className="text-gray-500 ml-1">{a.detail}</span>}
+                    <p className="text-gray-400">{new Date(a.createdAt).toLocaleString()}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Due date */}
+          {cr.dueDate && (
+            <section className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-sm font-semibold text-gray-700 mb-1">Due Date</h3>
+              <p className="text-sm text-gray-900">{new Date(cr.dueDate).toLocaleDateString()}</p>
+            </section>
+          )}
+        </div>
       </div>
+
+      {lightbox && <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />}
     </div>
   );
 }

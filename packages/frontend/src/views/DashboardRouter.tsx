@@ -1,5 +1,5 @@
 /**
- * Dispatches to role-specific dashboard.
+ * Dispatches to role-specific dashboard (v2).
  */
 import { useSession } from "../auth/SessionContext.js";
 import { ClientDashboard } from "./ClientDashboard.js";
