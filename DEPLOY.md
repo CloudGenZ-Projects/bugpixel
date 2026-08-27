@@ -87,9 +87,6 @@ CRP_R2_ACCOUNT_ID=your_cloudflare_account_id
 CRP_R2_ACCESS_KEY=your_r2_access_key_id
 CRP_R2_SECRET_KEY=your_r2_secret_access_key
 CRP_R2_BUCKET=bugpixel-storage
-
-# Cross-origin inspector (if client sites are on different domains)
-# CRP_ALLOWED_ORIGINS=https://client-site-1.com,https://client-site-2.com
 EOF
 
 # Generate the secret
@@ -141,7 +138,7 @@ sudo systemctl start bugpixel
 
 # Verify it's running
 sudo systemctl status bugpixel
-curl http://localhost:3000/api/session  # Should return 401
+curl http://localhost:3000/api/auth/me  # Should return 401
 ```
 
 ## Step 7: Caddy Reverse Proxy (Automatic HTTPS)
@@ -179,16 +176,18 @@ On each client website, add before `</body>`:
 
 The Website ID comes from the portal's database (visible in admin panel or via the seed output).
 
-## Step 9: Cross-Origin Setup (if client sites are on different domains)
+## Step 9: Cross-Origin Setup (client sites on different domains)
 
-If the client website is on a different domain than the portal:
+**No extra configuration needed in v2.** The portal automatically allows cross-origin
+requests from any registered website URL (derived from the `website` table, cached 60s).
 
-1. Set `CRP_ALLOWED_ORIGINS` env var to include the client site origin
-2. **Cookie issue**: The current `SameSite=Strict` cookie won't work cross-origin. 
-   You'll need to change it to `SameSite=None; Secure` in `app.ts` `setSessionCookie`.
-   
-   **Recommended approach**: Serve client sites from a subdomain of the portal domain
-   (e.g. `client1.yourdomain.com`) to avoid cross-site cookie issues entirely.
+When you add a website in the admin panel (e.g. `https://clientsite.com`), its origin
+is automatically CORS-allowed. Cookies are already `SameSite=None; Secure`, so the
+inspector works cross-origin out of the box.
+
+Just ensure:
+- The portal runs behind HTTPS (Caddy handles this)
+- The client website loads the inspector script from the portal's HTTPS URL
 
 ---
 
@@ -219,7 +218,7 @@ R2 storage is durable by default (11 nines). No backup needed for blobs.
 sudo journalctl -u bugpixel -f
 
 # Health check (add to uptime monitor)
-curl -sf https://portal.yourdomain.com/api/session > /dev/null && echo "UP" || echo "DOWN"
+curl -sf https://portal.yourdomain.com/api/auth/me > /dev/null && echo "UP" || echo "DOWN"
 ```
 
 ## Cost Estimate
