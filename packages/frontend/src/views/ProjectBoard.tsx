@@ -38,16 +38,40 @@ interface Props {
 
 export function ProjectBoard({ projectId, projectName }: Props) {
   const [requests, setRequests] = useState<EnrichedRequest[]>([]);
+  const [websites, setWebsites] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
+    // Load website names for tags
+    endpoints.listWebsites().then((res) => {
+      const map: Record<string, string> = {};
+      for (const w of res.websites) {
+        map[w.id] = w.name;
+      }
+      setWebsites(map);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
-    endpoints.listProjectChangeRequests(projectId).then((res) => {
-      setRequests(res.changeRequests);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    const fetcher =
+      projectId === "ALL"
+        ? endpoints.listChangeRequests()
+        : endpoints.listProjectChangeRequests(projectId);
+
+    fetcher
+      .then((res) => {
+        const raw = (res.changeRequests as any) || [];
+        const normalized: EnrichedRequest[] = raw.map((r: any) => ({
+          ...r,
+          screenshots: Array.isArray(r.screenshots) ? r.screenshots : [],
+        }));
+        setRequests(normalized);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, [projectId]);
 
   if (loading) {
@@ -61,7 +85,12 @@ export function ProjectBoard({ projectId, projectName }: Props) {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">{projectName}</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-gray-900">{projectName}</h2>
+        <span className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full font-medium">
+          {requests.length} total {requests.length === 1 ? "request" : "requests"}
+        </span>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {columns.map(({ status, items }) => (
           <div key={status} className={`rounded-xl border p-3 min-h-[200px] ${STATUS_COLORS[status]}`}>
@@ -75,44 +104,52 @@ export function ProjectBoard({ projectId, projectName }: Props) {
               {items.length === 0 && (
                 <p className="text-xs text-gray-400 italic text-center py-4">No requests</p>
               )}
-              {items.map((cr) => (
-                <div
-                  key={cr.id}
-                  onClick={() => navigate(`/requests/${cr.id}`)}
-                  className="bg-white rounded-lg p-3 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md hover:border-gray-200 transition-all"
-                >
-                  <p className="text-sm text-gray-900 font-medium line-clamp-2 mb-2">
-                    {cr.description}
-                  </p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PRIORITY_COLORS[cr.priority]}`}>
-                      {cr.priority}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(cr.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {cr.screenshots.length > 0 && (
-                    <div className="mt-2 flex gap-1">
-                      {cr.screenshots.slice(0, 2).map((s) => (
-                        <img
-                          key={s.id}
-                          src={`/files/${s.storageKey.slice(0, 2)}/${s.storageKey.slice(2, 4)}/${s.storageKey}`}
-                          alt="Screenshot"
-                          className="w-12 h-12 rounded object-cover border border-gray-200 cursor-zoom-in"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLightbox(`/files/${s.storageKey.slice(0, 2)}/${s.storageKey.slice(2, 4)}/${s.storageKey}`);
-                          }}
-                        />
-                      ))}
-                      {cr.screenshots.length > 2 && (
-                        <span className="text-xs text-gray-400 self-center">+{cr.screenshots.length - 2}</span>
+              {items.map((cr) => {
+                const ssList = Array.isArray(cr.screenshots) ? cr.screenshots : [];
+                return (
+                  <div
+                    key={cr.id}
+                    onClick={() => navigate(`/requests/${cr.id}`)}
+                    className="bg-white rounded-lg p-3 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md hover:border-gray-200 transition-all"
+                  >
+                    <p className="text-sm text-gray-900 font-medium line-clamp-2 mb-2">
+                      {cr.description}
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {websites[cr.websiteId] && (
+                        <span className="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-medium">
+                          {websites[cr.websiteId]}
+                        </span>
                       )}
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PRIORITY_COLORS[cr.priority]}`}>
+                        {cr.priority}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(cr.createdAt).toLocaleDateString()}
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+                    {ssList.length > 0 && (
+                      <div className="mt-2 flex gap-1">
+                        {ssList.slice(0, 2).map((s) => (
+                          <img
+                            key={s.id}
+                            src={`/files/${s.storageKey.slice(0, 2)}/${s.storageKey.slice(2, 4)}/${s.storageKey}`}
+                            alt="Screenshot"
+                            className="w-12 h-12 rounded object-cover border border-gray-200 cursor-zoom-in"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightbox(`/files/${s.storageKey.slice(0, 2)}/${s.storageKey.slice(2, 4)}/${s.storageKey}`);
+                            }}
+                          />
+                        ))}
+                        {ssList.length > 2 && (
+                          <span className="text-xs text-gray-400 self-center">+{ssList.length - 2}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}

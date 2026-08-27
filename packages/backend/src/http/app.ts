@@ -161,7 +161,11 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     if (role === Role.Admin) requests = container.listing.listAll();
     else if (role === Role.Developer) requests = container.listing.listForDeveloper(userId);
     else requests = container.listing.listForClient(userId);
-    res.json({ changeRequests: requests });
+    const enriched = requests.map((cr) => ({
+      ...cr,
+      screenshots: container.repos.screenshots.listByRequest(cr.id),
+    }));
+    res.json({ changeRequests: enriched });
   }));
 
   app.get("/api/change-requests/:id", requireSession, asyncHandler(async (req: Request, res: Response) => {
@@ -345,9 +349,56 @@ export function makeApp(container: Container, options: AppOptions = {}) {
     res.status(201).json({ assignment });
   }));
 
+  app.patch("/api/admin/projects/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: { code: "VALIDATION_REQUIRED", message: "name required." } });
+    container.repos.projects.update(req.params.id, name);
+    const updated = container.repos.projects.getById(req.params.id);
+    res.json({ project: updated });
+  }));
+
+  app.delete("/api/admin/projects/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    container.repos.projects.remove(req.params.id);
+    res.json({ ok: true });
+  }));
+
+  app.patch("/api/admin/users/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { email, role, password } = req.body;
+    const fields: { email?: string; role?: Role; passwordHash?: string } = {};
+    if (email) fields.email = email;
+    if (role && Object.values(Role).includes(role)) fields.role = role;
+    if (password) fields.passwordHash = container.auth.hashPassword(password);
+    container.repos.users.update(req.params.id, fields);
+    const updated = container.repos.users.getById(req.params.id);
+    res.json({ user: updated ? { id: updated.id, email: updated.email, role: updated.role } : null });
+  }));
+
+  app.delete("/api/admin/users/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    container.repos.users.remove(req.params.id);
+    res.json({ ok: true });
+  }));
+
+  app.patch("/api/admin/websites/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    const { name, url, projectId, ownerClientId } = req.body;
+    container.repos.websites.update(req.params.id, { name, url, projectId, ownerClientId });
+    cachedOrigins = null;
+    const updated = container.repos.websites.getById(req.params.id);
+    res.json({ website: updated });
+  }));
+
   app.delete("/api/admin/websites/:id", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
     container.repos.websites.remove(req.params.id);
     cachedOrigins = null;
+    res.json({ ok: true });
+  }));
+
+  app.get("/api/admin/assignments", ...requireRole(Role.Admin), asyncHandler(async (_req: Request, res: Response) => {
+    const assignments = container.repos.assignments.list();
+    res.json({ assignments });
+  }));
+
+  app.delete("/api/admin/assignments/:projectId", ...requireRole(Role.Admin), csrf, asyncHandler(async (req: Request, res: Response) => {
+    container.repos.assignments.removeForProject(req.params.projectId);
     res.json({ ok: true });
   }));
 

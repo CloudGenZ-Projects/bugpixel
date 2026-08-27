@@ -47,9 +47,11 @@ export function makeWebsiteRepo(db: AppDatabase) {
       return rows.map(mapWebsite);
     },
 
-    update(id: string, fields: { name?: string; url?: string }): void {
+    update(id: string, fields: { name?: string; url?: string; projectId?: string; ownerClientId?: string }): void {
       if (fields.name) db.prepare(`UPDATE website SET name = ? WHERE id = ?`).run(fields.name, id);
       if (fields.url) db.prepare(`UPDATE website SET url = ? WHERE id = ?`).run(fields.url, id);
+      if (fields.projectId) db.prepare(`UPDATE website SET project_id = ? WHERE id = ?`).run(fields.projectId, id);
+      if (fields.ownerClientId) db.prepare(`UPDATE website SET owner_client_id = ? WHERE id = ?`).run(fields.ownerClientId, id);
     },
 
     remove(id: string): void {

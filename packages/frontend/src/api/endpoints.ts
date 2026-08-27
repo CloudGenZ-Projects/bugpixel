@@ -106,16 +106,37 @@ export const endpoints = {
   async createUser(email: string, password: string, role: string) {
     return api.post<{ user: { id: string; email: string; role: string } }>("/api/admin/users", { email, password, role });
   },
+  async updateUser(id: string, data: { email?: string; role?: string; password?: string }) {
+    return api.patch<{ user: { id: string; email: string; role: string } }>(`/api/admin/users/${id}`, data);
+  },
+  async deleteUser(id: string) {
+    return api.del<{ ok: boolean }>(`/api/admin/users/${id}`);
+  },
   async createProject(name: string) {
     return api.post<{ project: { id: string; name: string } }>("/api/admin/projects", { name });
+  },
+  async updateProject(id: string, name: string) {
+    return api.patch<{ project: { id: string; name: string } }>(`/api/admin/projects/${id}`, { name });
+  },
+  async deleteProject(id: string) {
+    return api.del<{ ok: boolean }>(`/api/admin/projects/${id}`);
   },
   async createWebsite(projectId: string, ownerClientId: string, name: string, url: string) {
     return api.post<{ website: any }>("/api/admin/websites", { projectId, ownerClientId, name, url });
   },
-  async createAssignment(projectId: string, developerId: string) {
-    return api.post<{ assignment: any }>("/api/admin/assignments", { projectId, developerId });
+  async updateWebsite(id: string, data: { name?: string; url?: string; projectId?: string; ownerClientId?: string }) {
+    return api.patch<{ website: any }>(`/api/admin/websites/${id}`, data);
   },
   async deleteWebsite(id: string) {
     return api.del<{ ok: boolean }>(`/api/admin/websites/${id}`);
+  },
+  async listAssignments() {
+    return api.get<{ assignments: { id: string; projectId: string; developerId: string; createdAt: string }[] }>("/api/admin/assignments");
+  },
+  async createAssignment(projectId: string, developerId: string) {
+    return api.post<{ assignment: any }>("/api/admin/assignments", { projectId, developerId });
+  },
+  async deleteAssignment(projectId: string) {
+    return api.del<{ ok: boolean }>(`/api/admin/assignments/${projectId}`);
   },
 };

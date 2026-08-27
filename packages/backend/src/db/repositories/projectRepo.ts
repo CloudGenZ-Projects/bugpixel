@@ -21,6 +21,14 @@ export function makeProjectRepo(db: AppDatabase) {
       const rows = db.prepare(`SELECT * FROM project ORDER BY name ASC`).all() as Row[];
       return rows.map(mapProject);
     },
+
+    update(id: string, name: string): void {
+      db.prepare(`UPDATE project SET name = ? WHERE id = ?`).run(name, id);
+    },
+
+    remove(id: string): void {
+      db.prepare(`DELETE FROM project WHERE id = ?`).run(id);
+    },
   };
 }
 

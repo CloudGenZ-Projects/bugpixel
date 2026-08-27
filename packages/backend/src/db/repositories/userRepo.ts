@@ -51,6 +51,12 @@ export function makeUserRepo(db: AppDatabase) {
     updatePassword(id: string, passwordHash: string): void {
       db.prepare(`UPDATE user SET password_hash = ? WHERE id = ?`).run(passwordHash, id);
     },
+
+    update(id: string, fields: { email?: string; role?: User["role"]; passwordHash?: string }): void {
+      if (fields.email) db.prepare(`UPDATE user SET email = ? WHERE id = ?`).run(fields.email, id);
+      if (fields.role) db.prepare(`UPDATE user SET role = ? WHERE id = ?`).run(fields.role, id);
+      if (fields.passwordHash) db.prepare(`UPDATE user SET password_hash = ? WHERE id = ?`).run(fields.passwordHash, id);
+    },
   };
 }
 
